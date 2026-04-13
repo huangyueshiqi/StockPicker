@@ -1,0 +1,124 @@
+{
+  "name": "优质价值策略",
+  "description": "优质价值投资策略",
+  "global_params": {
+    "top_K" : 20,
+    "start_date" : "20200427",
+    "end_date" : "20250425",
+    "rebalance_period" : 60,
+    "folder_name" : "prem_value"
+  },
+  "filters": [
+    {
+      "type": "rank",
+      "name": "行业双低筛选",
+      "column": "S_VAL_PB_NEW",
+      "operator": "<=",
+      "threshold": 0.3,
+      "rank_type": "percentile",
+      "scope": "industry",
+      "industry_column": "NAME",
+      "ascending": true,
+      "description": "筛选行业内PB低于中位数的股票"
+    },
+    {
+      "type": "rank",
+      "name": "行业双低筛选",
+      "column": "S_VAL_PE_TTM",
+      "operator": "<=",
+      "threshold": 0.3,
+      "rank_type": "percentile",
+      "scope": "industry",
+      "industry_column": "NAME",
+      "ascending": true,
+      "description": "筛选行业内PE低于中位数的股票"
+    },
+    {
+      "type": "simple",
+      "name": "流动性良好",
+      "column": "S_FA_CURRENT",
+      "operator": ">",
+      "threshold": 1.5,
+      "description": "流动比率>0.9"
+    },
+    {
+      "type": "rank",
+      "name": "相对低估值",
+      "column": "EVEBITDA",
+      "operator": "<=",
+      "threshold": 0.4,
+      "rank_type": "percentile",
+      "scope": "industry",
+      "industry_column": "NAME",
+      "ascending": true,
+      "description": "EV/EBITDA<行业均值*0.8"
+    },
+    {
+      "type": "simple",
+      "name": "自由现金流为正",
+      "column": "S_FA_FCFF",
+      "operator": ">",
+      "threshold": 0,
+      "description": "自由现金流为正"
+    },
+    {
+      "type": "simple",
+      "name": "收入稳健增长",
+      "column": "OPER_REV_CAGR3",
+      "operator": ">=",
+      "threshold": 0.05,
+      "description": "营业收入3年复合增长率>=4%"
+    }
+  ],
+  "ranking": {
+    "method": "multi_simple",
+    "name": "多因子综合排序",
+    "description": "结合盈利和成长性的多重简单排序",
+    "components": [
+      {
+        "name": "市净率排序",
+        "column": "S_VAL_PB_NEW",
+        "ascending": true,
+        "scope": "industry",
+        "industry_column": "NAME",
+        "weight": 1,
+        "description": "行业内市净率越低越好"
+      },
+      {
+        "name": "市盈率排序",
+        "column": "S_VAL_PE_TTM",
+        "ascending": true,
+        "scope": "industry",
+        "industry_column": "NAME",
+        "weight": 1,
+        "description": "行业内市盈率越低越好"
+      }
+
+    ]
+  },
+  "weight_allocation": {
+      "type": "equal",
+      "name": "等权重分配",
+      "description": "为同一调仓日中股票分配相同权重"
+  }
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

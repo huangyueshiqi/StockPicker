@@ -10,7 +10,7 @@ from qlib.data import D
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from framework.strategy_framework import BaseDataReader
 
@@ -19,9 +19,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger('QlibDataLoader')
 
 
-class FieldFillStrategies(BaseModel):
+class FieldFillStrategies(RootModel[Dict[str, str]]):
     """定义字段填充策略的数据模型"""
-    __root__: Dict[str, str] = Field(..., description="列名与对应的填充策略映射（'0' 或 'ffill'）")
+    root: Dict[str, str] = Field(..., description="列名与对应的填充策略映射（'0' 或 'ffill'）")
 
 
 # 定义 LLM 提示模板
@@ -130,14 +130,17 @@ class QlibDataReader(BaseDataReader):
 
         try:
             strategies = chain.invoke({"target_fields_str": target_fields_str, "reference_info": reference_info})
-            
+
             # 兼容 Pydantic v1/v2 的返回格式
-            if hasattr(strategies, '__root__'):
+            if hasattr(strategies, 'root'):
+                strategies_dict = strategies.root
+            elif hasattr(strategies, '__root__'):
                 strategies_dict = strategies.__root__
             elif isinstance(strategies, dict):
                 strategies_dict = strategies
             else:
-                strategies_dict = strategies.dict().get('__root__', strategies.dict())
+                dumped = strategies.model_dump() if hasattr(strategies, 'model_dump') else strategies.dict()
+                strategies_dict = dumped.get('root', dumped.get('__root__', dumped))
 
             logger.info(f"LLM建议的填充策略: {strategies_dict}")
 

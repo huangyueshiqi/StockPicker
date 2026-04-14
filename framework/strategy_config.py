@@ -169,7 +169,7 @@ class StrategyFactory:
                 name=name,
                 column=filter_config['column'],
                 min_value=filter_config['min_value'],
-                max_value=filter_config['operator'],
+                max_value=filter_config['max_value'],
                 include_min=filter_config.get('include_min', True),
                 include_max=filter_config.get('include_max', True),
                 description=description

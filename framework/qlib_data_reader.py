@@ -325,22 +325,53 @@ class QlibDataReader(BaseDataReader):
             logger.info(f"正在读取并合并行业信息文件: {self.inst_stock_file}")
             try:
                 inst_df = pd.read_csv(self.inst_stock_file)
-                # 假设文件有两列，一列为行业名，一列为股票代码
-                # 如果存在多个不同命名的列，此处进行容错和标准化
-                if '行业' in inst_df.columns and '股票' in inst_df.columns:
-                    inst_df = inst_df.rename(columns={'行业': 'NAME', '股票': 'instrument'})
+                # 根据新格式重命名列：STOCKCODE -> instrument
+                if 'STOCKCODE' in inst_df.columns:
+                    inst_df = inst_df.rename(columns={'STOCKCODE': 'instrument'})
+                elif '股票' in inst_df.columns:
+                    inst_df = inst_df.rename(columns={'股票': 'instrument'})
+                    
+                if '行业' in inst_df.columns and 'NAME' not in inst_df.columns:
+                    inst_df = inst_df.rename(columns={'行业': 'NAME'})
                 
-                # 确保有 instrument 列可供 merge
-                if 'instrument' in inst_df.columns and 'NAME' in inst_df.columns:
-                    # 保留 instrument 和 NAME 列，去除重复项
+                # 检查必需列
+                required_cols = {'instrument', 'NAME', 'BEGINDATE', 'ENDDATE'}
+                if required_cols.issubset(inst_df.columns) and not merge_data.empty:
+                    # 将 BEGINDATE 和 ENDDATE 转为数值类型(YYYYMMDD)以便比较
+                    inst_df['BEGINDATE'] = pd.to_numeric(inst_df['BEGINDATE'], errors='coerce').fillna(0)
+                    inst_df['ENDDATE'] = pd.to_numeric(inst_df['ENDDATE'], errors='coerce').fillna(99999999)
+                    
+                    # 准备宽表的 datetime 列用于比较 (YYYYMMDD 格式整数)
+                    merge_data['temp_date_int'] = merge_data['datetime'].dt.strftime('%Y%m%d').astype(int)
+                    
+                    # 由于行业信息是分时间段生效的，使用 pandasql 或者按条件 merge 较为复杂
+                    # 这里我们先做 instrument 维度的 outer/left join，然后按时间条件过滤
+                    inst_subset = inst_df[['instrument', 'NAME', 'BEGINDATE', 'ENDDATE']].copy()
+                    
+                    # 先根据 instrument 合并，这会产生笛卡尔积（一只股票在多个时间段有多个行业记录）
+                    merged_with_inst = pd.merge(merge_data, inst_subset, on='instrument', how='left')
+                    
+                    # 过滤出时间匹配的行：BEGINDATE <= 当前数据日期 <= ENDDATE
+                    # 包含NaN的情况（即该股票没有行业数据），直接保留
+                    mask_valid_industry = (merged_with_inst['temp_date_int'] >= merged_with_inst['BEGINDATE']) & \
+                                          (merged_with_inst['temp_date_int'] <= merged_with_inst['ENDDATE'])
+                    mask_no_industry = merged_with_inst['NAME'].isna()
+                    
+                    merge_data = merged_with_inst[mask_valid_industry | mask_no_industry].copy()
+                    
+                    # 清理临时列
+                    merge_data = merge_data.drop(columns=['temp_date_int', 'BEGINDATE', 'ENDDATE'])
+                    
+                    # 防止因为时间交叠导致重复记录，基于原有的键去重
+                    merge_data = merge_data.drop_duplicates(subset=['datetime', 'instrument'])
+                    
+                elif 'instrument' in inst_df.columns and 'NAME' in inst_df.columns:
+                    # 兼容老格式（没有 BEGINDATE/ENDDATE，直接根据 instrument 合并）
                     inst_df = inst_df[['instrument', 'NAME']].drop_duplicates()
                     if not merge_data.empty:
-                        # 基于 instrument (股票代码) 进行左连接
                         merge_data = pd.merge(merge_data, inst_df, on='instrument', how='left')
-                    else:
-                        logger.warning("主数据宽表为空，无法合并行业信息。")
                 else:
-                    logger.warning(f"行业信息文件 {self.inst_stock_file} 缺少必要的 '股票' 或 '行业' 列，合并跳过。当前列: {inst_df.columns}")
+                    logger.warning(f"行业信息文件 {self.inst_stock_file} 缺少必要的列。当前列: {inst_df.columns}")
             except Exception as e:
                 logger.error(f"读取或合并行业信息文件出错: {e}")
         else:

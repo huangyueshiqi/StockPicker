@@ -78,6 +78,15 @@ class StrategyConfigLoader:
         """
         return self.config.get('global_params', {})
 
+    def get_data_source_config(self) -> Dict:
+        """
+        获取数据源配置 (例如 Qlib 映射文件、股票池等)
+
+        返回：
+            数据源配置字典
+        """
+        return self.config.get('data_source', {})
+
     def get_filters(self) -> List[Dict]:
         """
         获取筛选条件配置

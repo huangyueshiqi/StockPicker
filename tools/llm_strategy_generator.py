@@ -242,22 +242,20 @@ class LLMStrategyGenerator:
         # 1. 提取 Filters 中的列
         for f in strategy_config.get('filters', []):
             if 'column' in f: required_fields.add(f['column'])
-            if 'industry_column' in f: required_fields.add(f['industry_column'])
             
         # 2. 提取 Ranking 中的列
         ranking = strategy_config.get('ranking', {})
         if 'column' in ranking:
             required_fields.add(ranking['column'])
-        if 'scope' in ranking and ranking['scope'] == 'industry' and 'industry_column' in ranking:
-            required_fields.add(ranking['industry_column'])
             
         for comp in ranking.get('components', []):
             if 'column' in comp: required_fields.add(comp['column'])
-            if 'industry_column' in comp: required_fields.add(comp['industry_column'])
             
         # 3. 基础必加字段 (供 QlibDataReader 或主框架使用)
         required_fields.add('close') # 用于价格处理
-        # inst_stock 或者 NAME 行业列根据配置而定，默认需要行业
+        
+        excluded_fields = {'NAME'}
+        required_fields = {f for f in required_fields if f not in excluded_fields}
         
         return list(required_fields)
 

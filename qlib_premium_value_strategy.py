@@ -104,17 +104,6 @@ class QlibPremiumValueStrategy(BaseStrategy):
         """
         初始化策略
         """
-        # 实例化基于 Qlib 的 Reader
-        data_reader = QlibDataReader(
-            mapping_file=mapping_file,
-            stock_pool_file=stock_pool_file,
-            macro_file=macro_file
-        )
-        
-        data_processor = QlibPremiumValueDataProcessor()
-        stock_filter = QlibPremiumValueStockFilter()
-        feature_calculator = QlibPremiumValueFeatureCalculator()
-
         if use_config:
             if config_filename is None:
                 config_filename = "premium_value_strategy.json"
@@ -137,6 +126,19 @@ class QlibPremiumValueStrategy(BaseStrategy):
             )
         else:
             stock_selector = PremiumValueStockSelector()
+            config_path = None
+
+        # 实例化基于 Qlib 的 Reader
+        data_reader = QlibDataReader(
+            mapping_file=mapping_file,
+            stock_pool_file=stock_pool_file,
+            macro_file=macro_file,
+            config_path=config_path
+        )
+        
+        data_processor = QlibPremiumValueDataProcessor()
+        stock_filter = QlibPremiumValueStockFilter()
+        feature_calculator = QlibPremiumValueFeatureCalculator()
         
         super().__init__(
             data_reader=data_reader,

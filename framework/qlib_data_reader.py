@@ -56,7 +56,8 @@ class QlibDataReader(BaseDataReader):
                  price_data_path: str = "/home/quant/zc/finance_deal/qlib_data/price_data0821",
                  fin_data_path: str = "/home/quant/zc/finance_deal/qlib_data/pit_data",
                  inst_stock_file: str = "documents/inst_stock.csv",
-                 external_data_files: Optional[List[str]] = None):
+                 external_data_files: Optional[List[str]] = None,
+                 config_path: Optional[str] = None):
         """
         初始化 Qlib 数据读取器
         
@@ -73,6 +74,7 @@ class QlibDataReader(BaseDataReader):
             fin_data_path: Qlib 财务数据路径
             inst_stock_file: 包含行业信息的 CSV 文件路径
             external_data_files: 外部数据文件列表
+            config_path: 策略配置文件路径，用于重写实际列名
         """
         self.need_start_date = True  # 该读取器可能需要时间段来拉取序列数据
         self.mapping_file = mapping_file
@@ -80,6 +82,7 @@ class QlibDataReader(BaseDataReader):
         self.macro_file = macro_file
         self.inst_stock_file = inst_stock_file
         self.external_data_files = external_data_files
+        self.config_path = config_path
         
         self.price_data_path = price_data_path
         self.fin_data_path = fin_data_path
@@ -241,6 +244,72 @@ class QlibDataReader(BaseDataReader):
             df = df.drop(columns=empty_cols)
         return df
 
+    def rewrite_strategy_config(self, mapping_results: dict, actual_columns: pd.Index):
+        """将实际列名重新写入到策略配置的 column 字段中"""
+        if not hasattr(self, 'config_path') or not self.config_path or not os.path.exists(self.config_path):
+            return
+            
+        field_to_actual = {}
+        for mapping in mapping_results.get('mappings', []):
+            strategy_field = mapping.get('strategy_field')
+            for field_info in mapping.get('related_fields', []):
+                table_name = field_info.get('table_name', '').lower()
+                mapped_field = field_info.get('field_name', '')
+                
+                possible_cols = []
+                if table_name in self.fin_tables_lower:
+                    possible_cols = [f'cor_{mapped_field}_{table_name}', f'adj_{mapped_field}_{table_name}']
+                elif table_name in self.price_tables_lower:
+                    if mapped_field in ['close']:
+                        possible_cols = [f'{mapped_field}']
+                    else:
+                        possible_cols = [f'{mapped_field}_{table_name}']
+                elif table_name in ['宏观']:
+                    possible_cols = [mapped_field]
+                    
+                # 寻找在数据框中实际存在的列名
+                for p_col in possible_cols:
+                    if p_col in actual_columns:
+                        field_to_actual[strategy_field] = p_col
+                        break
+                
+                if strategy_field in field_to_actual:
+                    break
+
+        if not field_to_actual:
+            return
+
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            
+        updated = False
+        
+        # 更新 filters
+        for f_conf in config.get('filters', []):
+            old_col = f_conf.get('column')
+            if old_col in field_to_actual and field_to_actual[old_col] != old_col:
+                f_conf['column'] = field_to_actual[old_col]
+                updated = True
+                
+        # 更新 ranking
+        ranking = config.get('ranking', {})
+        if 'column' in ranking:
+            old_col = ranking.get('column')
+            if old_col in field_to_actual and field_to_actual[old_col] != old_col:
+                ranking['column'] = field_to_actual[old_col]
+                updated = True
+                
+        for comp in ranking.get('components', []):
+            old_col = comp.get('column')
+            if old_col in field_to_actual and field_to_actual[old_col] != old_col:
+                comp['column'] = field_to_actual[old_col]
+                updated = True
+                
+        if updated:
+            logger.info(f"将实际的 Qlib 列名重写回策略配置文件 {self.config_path} 中: {field_to_actual}")
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+
     def read_data(self, start_date: str = None, end_date: str = None) -> Dict[str, pd.DataFrame]:
         """
         实现 BaseDataReader 接口：获取 Qlib、宏观、外部数据并合并
@@ -400,6 +469,10 @@ class QlibDataReader(BaseDataReader):
             
         logger.info(f"数据合并完成，数据形状: {merge_data.shape}")
         
+        # 将实际获取到的列名重写回策略配置中，确保筛选条件引用的字段一致
+        if not merge_data.empty and hasattr(self, 'config_path') and self.config_path:
+            self.rewrite_strategy_config(mapping_results, merge_data.columns)
+
         # 返回兼容原有框架的字典结构
         return {
             'qlib_data': merge_data,

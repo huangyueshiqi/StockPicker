@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import csv
 import logging
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -14,7 +15,10 @@ from langchain_core.output_parsers import JsonOutputParser
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('LLMStrategyGenerator')
 
-# 定义 Pydantic 模型，用于约束大模型输出的 JSON 格式
+# ==========================================
+# 1. 策略配置生成相关模型与 Prompt
+# ==========================================
+
 
 class GlobalParams(BaseModel):
     top_K: int = Field(default=20, description="最大选股数量")
@@ -92,6 +96,51 @@ LLM_STRATEGY_PROMPT = """
 {format_instructions}
 """
 
+# ==========================================
+# 2. 字段映射相关模型与 Prompt
+# ==========================================
+
+class RelatedField(BaseModel):
+    table_name: str = Field(..., description="数据库表名")
+    field_name: str = Field(..., description="真实字段名")
+    description: str = Field(..., description="字段中文名或注释说明")
+
+class FieldMapping(BaseModel):
+    strategy_field: str = Field(..., description="策略配置中使用的字段名")
+    related_fields: List[RelatedField] = Field(..., description="从候选集合中匹配到的真实表和字段")
+
+class MappingResultSchema(BaseModel):
+    mappings: List[FieldMapping] = Field(..., description="所有字段的映射结果")
+
+LLM_MAPPING_PROMPT = """
+你是一个金融数据专家。我有一组量化策略中需要使用的字段名称（可能包含英文缩写或中文描述），以及一份包含许多真实数据库表和字段的候选对照表。
+请根据策略所需的字段，从候选对照表中挑选出最匹配的真实字段（可能不止一个，但一般一个对应一个核心业务字段）。
+
+需要映射的策略字段集合:
+{target_fields}
+
+候选的真实字段集合（格式为: table_name, field_name, 中文注释）:
+{candidate_fields}
+
+请输出严格的 JSON 格式，结构如下：
+{{
+  "mappings": [
+    {{
+      "strategy_field": "策略里的名字",
+      "related_fields": [
+        {{
+          "table_name": "匹配到的表名",
+          "field_name": "匹配到的真实字段名",
+          "description": "对应的中文说明"
+        }}
+      ]
+    }}
+  ]
+}}
+
+{format_instructions}
+"""
+
 class LLMStrategyGenerator:
     """使用大模型自动生成策略配置的工具类"""
     
@@ -157,10 +206,103 @@ class LLMStrategyGenerator:
                 json.dump(cleaned_config, f, ensure_ascii=False, indent=2)
                 
             logger.info(f"策略配置已成功生成并保存到: {output_file}")
-            return True
+            return cleaned_config
             
         except Exception as e:
             logger.error(f"生成策略配置失败: {e}")
+            return None
+
+    def read_csv_fields(self, file_paths: List[str]) -> List[str]:
+        """
+        读取 CSV 字段文件，生成候选字段集合字符串
+        """
+        all_fields = []
+        for file_path in file_paths:
+            if not os.path.exists(file_path):
+                logger.warning(f"候选字段对照表不存在，跳过: {file_path}")
+                continue
+                
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        desc = row.get('中文名') or row.get('注释') or ''
+                        field_info = f"{row.get('table_name', '')},{row.get('field_name', '')}, {desc}"
+                        all_fields.append(field_info)
+            except Exception as e:
+                logger.error(f"读取 {file_path} 时出错: {e}")
+        return all_fields
+
+    def extract_required_fields(self, strategy_config: Dict) -> List[str]:
+        """
+        从生成的策略配置中提取所有需要的字段
+        """
+        required_fields = set()
+        
+        # 1. 提取 Filters 中的列
+        for f in strategy_config.get('filters', []):
+            if 'column' in f: required_fields.add(f['column'])
+            if 'industry_column' in f: required_fields.add(f['industry_column'])
+            
+        # 2. 提取 Ranking 中的列
+        ranking = strategy_config.get('ranking', {})
+        if 'column' in ranking:
+            required_fields.add(ranking['column'])
+        if 'scope' in ranking and ranking['scope'] == 'industry' and 'industry_column' in ranking:
+            required_fields.add(ranking['industry_column'])
+            
+        for comp in ranking.get('components', []):
+            if 'column' in comp: required_fields.add(comp['column'])
+            if 'industry_column' in comp: required_fields.add(comp['industry_column'])
+            
+        # 3. 基础必加字段 (供 QlibDataReader 或主框架使用)
+        required_fields.add('close') # 用于价格处理
+        # inst_stock 或者 NAME 行业列根据配置而定，默认需要行业
+        
+        return list(required_fields)
+
+    def generate_mapping(self, strategy_config: Dict, csv_files: List[str], mapping_output_file: str) -> bool:
+        """
+        根据策略配置和本地的 CSV 字段表，利用 LLM 生成字段映射 mapping_result.json
+        """
+        if os.path.exists(mapping_output_file):
+            logger.info(f"映射文件 {mapping_output_file} 已存在，跳过生成步骤。如果需要重新生成请先删除。")
+            return True
+            
+        required_fields = self.extract_required_fields(strategy_config)
+        logger.info(f"需要映射的策略字段: {required_fields}")
+        
+        candidate_fields = self.read_csv_fields(csv_files)
+        if not candidate_fields:
+            logger.error("候选字段为空，无法执行字段映射，请检查 CSV 文件路径是否正确。")
+            return False
+            
+        candidate_str = "\n".join(candidate_fields)
+        
+        logger.info("正在调用 LLM 进行字段映射...")
+        parser = JsonOutputParser(pydantic_object=MappingResultSchema)
+        prompt = ChatPromptTemplate.from_template(
+            template=LLM_MAPPING_PROMPT,
+            partial_variables={"format_instructions": parser.get_format_instructions()}
+        )
+        
+        chain = prompt | self.llm | parser
+        
+        try:
+            mapping_result = chain.invoke({
+                "target_fields": ", ".join(required_fields),
+                "candidate_fields": candidate_str
+            })
+            
+            os.makedirs(os.path.dirname(os.path.abspath(mapping_output_file)), exist_ok=True)
+            with open(mapping_output_file, 'w', encoding='utf-8') as f:
+                json.dump(mapping_result, f, ensure_ascii=False, indent=2)
+                
+            logger.info(f"字段映射已成功生成并保存到: {mapping_output_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"生成字段映射失败: {e}")
             return False
 
 if __name__ == "__main__":
@@ -173,4 +315,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     generator = LLMStrategyGenerator(model=args.model, base_url=args.base_url)
-    generator.generate(args.prompt, args.output)
+    
+    # 1. 生成策略配置
+    strategy_config = generator.generate(args.prompt, args.output)
+    
+    if strategy_config:
+        # 2. 如果存在本地 CSV 对照表，则自动进行字段映射
+        csv_files = [
+            "documents/财务字段中英文对照表.csv",
+            "documents/宏观微观字段名对照表.csv",
+            "documents/量价字段中英文对照表.csv"
+        ]
+        
+        # 将输出文件同级目录作为 mapping 文件的保存路径
+        mapping_file = os.path.join(os.path.dirname(args.output), "mapping_result.json")
+        generator.generate_mapping(strategy_config, csv_files, mapping_file)

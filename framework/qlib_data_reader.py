@@ -55,6 +55,7 @@ class QlibDataReader(BaseDataReader):
                  timeout: float = 240.0,
                  price_data_path: str = "/home/quant/zc/finance_deal/qlib_data/price_data0821",
                  fin_data_path: str = "/home/quant/zc/finance_deal/qlib_data/pit_data",
+                 inst_stock_file: str = "documents/inst_stock.csv",
                  external_data_files: Optional[List[str]] = None):
         """
         初始化 Qlib 数据读取器
@@ -70,12 +71,14 @@ class QlibDataReader(BaseDataReader):
             timeout: LLM 超时时间
             price_data_path: Qlib 价格数据路径
             fin_data_path: Qlib 财务数据路径
+            inst_stock_file: 包含行业信息的 CSV 文件路径
             external_data_files: 外部数据文件列表
         """
         self.need_start_date = True  # 该读取器可能需要时间段来拉取序列数据
         self.mapping_file = mapping_file
         self.stock_pool_file = stock_pool_file
         self.macro_file = macro_file
+        self.inst_stock_file = inst_stock_file
         self.external_data_files = external_data_files
         
         self.price_data_path = price_data_path
@@ -314,7 +317,33 @@ class QlibDataReader(BaseDataReader):
                     else:
                         logger.warning(f"外部文件 {ext_file} 缺少 'datetime' 列，已跳过")
 
-        # 6. 数据清洗
+        # 6. 读取并合并行业数据 (inst_stock)
+        if os.path.exists(self.inst_stock_file):
+            logger.info(f"正在读取并合并行业信息文件: {self.inst_stock_file}")
+            try:
+                inst_df = pd.read_csv(self.inst_stock_file)
+                # 假设文件有两列，一列为行业名，一列为股票代码
+                # 如果存在多个不同命名的列，此处进行容错和标准化
+                if '行业' in inst_df.columns and '股票' in inst_df.columns:
+                    inst_df = inst_df.rename(columns={'行业': 'NAME', '股票': 'instrument'})
+                
+                # 确保有 instrument 列可供 merge
+                if 'instrument' in inst_df.columns and 'NAME' in inst_df.columns:
+                    # 保留 instrument 和 NAME 列，去除重复项
+                    inst_df = inst_df[['instrument', 'NAME']].drop_duplicates()
+                    if not merge_data.empty:
+                        # 基于 instrument (股票代码) 进行左连接
+                        merge_data = pd.merge(merge_data, inst_df, on='instrument', how='left')
+                    else:
+                        logger.warning("主数据宽表为空，无法合并行业信息。")
+                else:
+                    logger.warning(f"行业信息文件 {self.inst_stock_file} 缺少必要的 '股票' 或 '行业' 列，合并跳过。当前列: {inst_df.columns}")
+            except Exception as e:
+                logger.error(f"读取或合并行业信息文件出错: {e}")
+        else:
+            logger.warning(f"未找到行业信息文件 {self.inst_stock_file}，将缺少行业分类列(NAME)。")
+
+        # 7. 数据清洗
         if not merge_data.empty:
             # 统一列名以兼容 QuantStockPicker 框架
             # Qlib 使用 'instrument' 和 'datetime'

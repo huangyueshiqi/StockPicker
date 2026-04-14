@@ -8,7 +8,7 @@ from framework.strategy_framework import (
 )
 from framework.qlib_data_reader import QlibDataReader
 from premium_value_strategy_new import PremiumValueStockSelector
-
+from tools.llm_strategy_generator import LLMStrategyGenerator
 
 class QlibPremiumValueDataProcessor(BaseDataProcessor):
     """
@@ -154,21 +154,65 @@ class QlibPremiumValueStrategy(BaseStrategy):
 def main():
     print("\n===== 使用 Qlib 数据源的优质价值策略 =====")
     
-    # 这里的路径需要替换为真实的配置路径
-    mapping_file = "config/mapping_result.json"
-    stock_pool_file = "config/filtered_stock_pool.json"
-    macro_file = "documents/macro_data.csv"
+    # === 1. 环境与路径准备 ===
+    config_dir = "config"
+    docs_dir = "documents"
     
-    # 为了演示创建空文件避免报错
-    os.makedirs("documents", exist_ok=True)
+    # 策略相关的配置文件名
+    config_filename = "generated_strategy.json"
+    config_path = os.path.join(config_dir, config_filename)
+    mapping_file = os.path.join(config_dir, "mapping_result.json")
+    
+    # 外部依赖的参考数据文件
+    stock_pool_file = os.path.join(config_dir, "filtered_stock_pool.json")
+    macro_file = os.path.join(docs_dir, "macro_data.csv")
+    
+    # 字段候选文件列表，用于传递给大模型进行映射
+    csv_files = [
+        os.path.join(docs_dir, "财务字段中英文对照表.csv"),
+        os.path.join(docs_dir, "宏观微观字段名对照表.csv"),
+        os.path.join(docs_dir, "量价字段中英文对照表.csv")
+    ]
+    
+    # 为演示环境初始化基础文件（如果在空环境测试）
+    os.makedirs(docs_dir, exist_ok=True)
+    os.makedirs(config_dir, exist_ok=True)
     if not os.path.exists(macro_file):
         with open(macro_file, 'w') as f: f.write("datetime,macro_value\n")
-    if not os.path.exists(mapping_file):
-        with open(mapping_file, 'w') as f: json.dump({"mappings": []}, f)
     if not os.path.exists(stock_pool_file):
         with open(stock_pool_file, 'w') as f: json.dump(["000001.SH"], f)
+        
+    # === 2. 策略配置与字段映射 (LLM 端到端链路) ===
+    
+    # 初始化 LLM 生成器
+    # 这里的模型和 base_url 可根据需要更改，或者依赖环境变量 OPENAI_API_KEY
+    llm_generator = LLMStrategyGenerator()
+    
+    # 如果策略配置文件不存在，则通过一句话自动生成
+    if not os.path.exists(config_path):
+        print("未找到策略配置，正在通过 LLM 生成...")
+        prompt = "我想要一个低市盈率的价值策略，选出行业内市盈率最低的20只股票，调仓周期为30天，测试时间从2021年1月1日到2023年12月31日"
+        strategy_config = llm_generator.generate(prompt, config_path)
+    else:
+        print("发现已存在的策略配置，直接读取。")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            strategy_config = json.load(f)
+            
+    if not strategy_config:
+        print("策略配置生成或读取失败，无法继续。")
+        return
+        
+    # 根据策略配置动态生成/复用 字段映射文件 (mapping_result.json)
+    if not os.path.exists(mapping_file):
+        print("未找到字段映射文件，正在通过 LLM 自动匹配真实数据表...")
+        success = llm_generator.generate_mapping(strategy_config, csv_files, mapping_file)
+        if not success:
+            print("字段映射生成失败。")
+            return
+    else:
+        print("发现已缓存的字段映射 mapping_result.json，直接复用。")
 
-    config_filename = "premium_value_strategy.json"
+    # === 3. 执行策略回测 ===
     
     strategy = QlibPremiumValueStrategy(
         mapping_file=mapping_file,
@@ -176,12 +220,11 @@ def main():
         macro_file=macro_file,
         use_config=True,
         config_filename=config_filename,
-        config_dir="config"
+        config_dir=config_dir
     )
     
     rebalance_result = strategy.run()
     strategy.save_results(rebalance_result, 'qlib_premium_value_strategy_result.csv')
-
 
 if __name__ == "__main__":
     main()

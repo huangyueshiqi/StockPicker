@@ -201,6 +201,10 @@ def build_run_llm_command(args, python_executable: str = None, script_dir: str =
     return cmd
 
 
+def should_generate_mapping(strategy_regenerated: bool, mapping_exists: bool) -> bool:
+    return strategy_regenerated or not mapping_exists
+
+
 def main(args):
     print("\n===== 使用 Qlib 数据源的端到端智能策略回测 =====")
     
@@ -247,9 +251,11 @@ def main(args):
     # 这里的模型和 base_url 可根据需要更改，或者依赖环境变量 OPENAI_API_KEY
     generator = LLMStrategyGenerator()
     
+    strategy_regenerated = False
     if args.prompt or args.interactive or not os.path.exists(config_path):
         print("正在通过 LLM 生成策略配置...")
         strategy_config = generator.generate(prompt, config_path)
+        strategy_regenerated = True
     else:
         print("发现已存在的策略配置，直接读取。")
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -260,7 +266,7 @@ def main(args):
         return
         
     # 根据策略配置动态生成/复用 字段映射文件 (mapping_result.json)
-    if args.prompt or args.interactive or not os.path.exists(mapping_file):
+    if should_generate_mapping(strategy_regenerated=strategy_regenerated, mapping_exists=os.path.exists(mapping_file)):
         print("未找到字段映射文件或需要重新生成，正在通过 LLM 自动匹配真实数据表...")
         success = generator.generate_mapping(strategy_config, csv_files, mapping_file)
         if not success:

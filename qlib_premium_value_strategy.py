@@ -13,6 +13,7 @@ from framework.strategy_framework import (
 )
 from framework.qlib_data_reader import QlibDataReader
 from framework.stock_selectors import PremiumValueStockSelector
+from framework.llm_cache_manager import make_cache_id, read_latest, write_latest, write_meta
 from tools.llm_strategy_generator import LLMStrategyGenerator
 
 class QlibPremiumValueDataProcessor(BaseDataProcessor):
@@ -162,6 +163,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='LLM 策略量化交易回测系统端到端流水线')
     parser.add_argument('--prompt', type=str, default='', help='自然语言策略描述')
     parser.add_argument('--interactive', action='store_true', help='如果没有提供prompt，是否进入交互模式输入')
+    parser.add_argument('--cache_id', type=str, default='', help='使用指定 cache_id(时间戳) 目录下的策略配置与映射文件')
     parser.add_argument('--mode', type=str, default='llm', help='回测模式，固定为llm')
     parser.add_argument('--trade_file', type=str, default='qlib_premium_value_strategy_result.csv', help='调仓表文件路径')
     parser.add_argument('--output', type=str, default='', help='输出结果文件路径')
@@ -221,10 +223,27 @@ def main(args):
     config_dir = "config"
     docs_dir = "documents"
     
-    # 策略相关的配置文件名
+    cache_root = os.path.join(config_dir, "llm_cache")
+    cache_id = args.cache_id.strip() if getattr(args, "cache_id", "") else ""
+    has_prompt_input = bool(args.prompt) or bool(args.interactive)
+
+    if not cache_id:
+        if has_prompt_input:
+            cache_id = make_cache_id()
+        else:
+            latest = read_latest(cache_root)
+            if not latest:
+                print(f"未提供 prompt 且未找到可用的 latest 缓存: {os.path.join(cache_root, 'latest.txt')}")
+                return
+            cache_id = latest
+
+    cache_dir = os.path.join(cache_root, cache_id)
+    os.makedirs(cache_dir, exist_ok=True)
+
     config_filename = "generated_strategy.json"
-    config_path = os.path.join(config_dir, config_filename)
-    mapping_file = os.path.join(config_dir, "mapping_result.json")
+    config_path = os.path.join(cache_dir, config_filename)
+    mapping_file = os.path.join(cache_dir, "mapping_result.json")
+    prompt_file = os.path.join(cache_dir, "prompt.txt")
     
     # 外部依赖的参考数据文件
     stock_pool_file = os.path.join(config_dir, "filtered_stock_pool.json")
@@ -252,12 +271,18 @@ def main(args):
     generator = LLMStrategyGenerator()
     
     strategy_regenerated = False
-    if args.prompt or args.interactive or not os.path.exists(config_path):
-        print("正在通过 LLM 生成策略配置...")
+    if has_prompt_input:
+        with open(prompt_file, "w", encoding="utf-8") as f:
+            f.write(prompt)
+
+    if has_prompt_input or not os.path.exists(config_path):
+        print(f"正在通过 LLM 生成策略配置... cache_id={cache_id}")
         strategy_config = generator.generate(prompt, config_path)
         strategy_regenerated = True
+        write_latest(cache_root, cache_id)
+        write_meta(cache_dir, {"cache_id": cache_id, "prompt": prompt, "created_at": time.time()})
     else:
-        print("发现已存在的策略配置，直接读取。")
+        print(f"发现已存在的策略配置，直接读取。cache_id={cache_id}")
         with open(config_path, 'r', encoding='utf-8') as f:
             strategy_config = json.load(f)
             
@@ -267,13 +292,13 @@ def main(args):
         
     # 根据策略配置动态生成/复用 字段映射文件 (mapping_result.json)
     if should_generate_mapping(strategy_regenerated=strategy_regenerated, mapping_exists=os.path.exists(mapping_file)):
-        print("未找到字段映射文件或需要重新生成，正在通过 LLM 自动匹配真实数据表...")
+        print(f"未找到字段映射文件或需要重新生成，正在通过 LLM 自动匹配真实数据表... cache_id={cache_id}")
         success = generator.generate_mapping(strategy_config, csv_files, mapping_file)
         if not success:
             print("字段映射生成失败。")
             return
     else:
-        print("发现已缓存的字段映射 mapping_result.json，直接复用。")
+        print(f"发现已缓存的字段映射 mapping_result.json，直接复用。cache_id={cache_id}")
 
     # === 3. 执行策略回测 ===
     
@@ -283,7 +308,7 @@ def main(args):
         macro_file=macro_file,
         use_config=True,
         config_filename=config_filename,
-        config_dir=config_dir
+        config_dir=cache_dir
     )
     
     rebalance_result = strategy.run()

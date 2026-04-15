@@ -5,6 +5,7 @@ import argparse
 import logging
 import sys
 import time
+import subprocess
 
 from framework.strategy_framework import (
     BaseDataProcessor, BaseStockFilter,
@@ -171,82 +172,33 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_backtest(args):
-    """执行回测流程"""
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    
-    if not os.path.exists(args.trade_file):
-        logging.error(f"调仓表文件不存在: {args.trade_file}")
-        return
+def build_run_llm_command(args, python_executable: str = None, script_dir: str = None):
+    if python_executable is None:
+        python_executable = sys.executable
 
-    # 动态将项目根目录加入到 sys.path 中
-    project_root = os.path.abspath(args.project_root)
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
+    if script_dir is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    try:
-        from main import BacktestManager
-        from utils.config import config
-    except ImportError as e:
-        logging.error(f"导入回测框架失败，请检查 project_root 路径是否正确 ({project_root}): {e}")
-        return
+    run_llm_path = os.path.join(script_dir, "run_llm.py")
+    cmd = [
+        python_executable,
+        run_llm_path,
+        "--mode", args.mode,
+        "--trade_file", args.trade_file,
+        "--plot_output", args.plot_output,
+        "--project_root", args.project_root,
+    ]
 
-    try:
-        trade_list = pd.read_csv(args.trade_file)
-        if 'datetime' not in trade_list.columns and 'date' in trade_list.columns:
-            date_col = 'date'
-        elif 'datetime' in trade_list.columns:
-            date_col = 'datetime'
-        else:
-            logging.error("调仓表中没有找到日期列 (date/datetime)")
-            return
+    if getattr(args, "output", ""):
+        cmd.extend(["--output", args.output])
 
-        trade_list[date_col] = pd.to_datetime(trade_list[date_col])
-        min_date = trade_list[date_col].min().strftime('%Y-%m-%d')
-        max_date = trade_list[date_col].max().strftime('%Y-%m-%d')
+    if getattr(args, "plot_trades", False):
+        cmd.append("--plot_trades")
 
-        start_date = min_date
-        end_date = (pd.to_datetime(max_date) + pd.Timedelta(days=30)).strftime('%Y-%m-%d')
-        logging.info(f"根据调仓表推断回测区间: {start_date} -> {end_date}")
-    except Exception as e:
-        logging.error(f"读取调仓表出错: {e}")
-        return
+    if getattr(args, "verbose", False):
+        cmd.append("--verbose")
 
-    param_map = {
-        'start_date': start_date,
-        'end_date': end_date,
-        'deal_dividend': False,
-        'save_state': False,
-        'adjust_freq': 'D',
-        'is_predict': False,
-    }
-
-    if param_map:
-        print("\n=== 策略配置参数更新 ===")
-        config.update_strategy_params(**param_map)
-        print("=======================")
-
-    if args.output:
-        os.makedirs(os.path.dirname(args.output), exist_ok=True)
-        sys.stdout = open(args.output, 'w', encoding='utf-8')
-
-    start_time = time.time()
-    print("执行 LLM 回测...")
-    
-    backtest_manager = BacktestManager()
-    backtest_manager.run_llm_backtest(
-        trade_file=args.trade_file,
-        plot_output=args.plot_output,
-        plot_trades=args.plot_trades,
-        verbose=args.verbose
-    )
-
-    end_time = time.time()
-    print(f'回测总运行时间：{end_time - start_time:.2f}秒')
-
-    if args.output:
-        sys.stdout.close()
-        sys.stdout = sys.__stdout__
+    return cmd
 
 
 def main(args):
@@ -334,7 +286,10 @@ def main(args):
 
     # === 4. 执行回测 ===
     print("\n===== 开始调用回测框架 =====")
-    run_backtest(args)
+    cmd = build_run_llm_command(args)
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(f"回测脚本执行失败，退出码: {result.returncode}")
 
 if __name__ == "__main__":
     args = parse_args()

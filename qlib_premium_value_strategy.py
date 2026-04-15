@@ -1,6 +1,10 @@
 import os
 import json
 import pandas as pd
+import argparse
+import logging
+import sys
+import time
 
 from framework.strategy_framework import (
     BaseDataProcessor, BaseStockFilter,
@@ -153,9 +157,32 @@ class QlibPremiumValueStrategy(BaseStrategy):
         )
 
 
-def main():
-    print("\n===== 使用 Qlib 数据源的优质价值策略 =====")
+def parse_args():
+    parser = argparse.ArgumentParser(description='LLM 策略量化交易回测系统端到端流水线')
+    parser.add_argument('--prompt', type=str, default='', help='自然语言策略描述')
+    parser.add_argument('--interactive', action='store_true', help='如果没有提供prompt，是否进入交互模式输入')
+    parser.add_argument('--mode', type=str, default='llm', help='回测模式，固定为llm')
+    parser.add_argument('--trade_file', type=str, default='qlib_premium_value_strategy_result.csv', help='调仓表文件路径')
+    parser.add_argument('--output', type=str, default='', help='输出结果文件路径')
+    parser.add_argument('--plot_output', type=str, default='plot/llm_strategy_plot.png', help='策略回测资产变化图保存路径')
+    parser.add_argument('--plot_trades', action='store_true', default=False, help='是否绘制每只股票的买卖点图 (默认关闭)')
+    parser.add_argument('--verbose', action='store_true', help='是否输出详细信息')
+    parser.add_argument('--project_root', type=str, default='/home/quant/zc/backtrader/QuantBacktester_57', help='QuantBacktester项目的根目录路径')
+    return parser.parse_args()
+
+
+def main(args):
+    print("\n===== 使用 Qlib 数据源的端到端智能策略回测 =====")
     
+    # 确定 prompt
+    prompt = args.prompt
+    if not prompt:
+        if args.interactive:
+            prompt = input("请输入你的选股策略描述 (例如: 寻找低市盈率、高ROE的股票，每60天调仓): ")
+        else:
+            prompt = "寻找低市盈率、高ROE的股票，每60天调仓" # 默认 fallback
+            print(f"未提供 prompt 且未开启交互模式，使用默认 prompt: {prompt}")
+
     # === 1. 环境与路径准备 ===
     config_dir = "config"
     docs_dir = "documents"
@@ -188,13 +215,11 @@ def main():
     
     # 初始化 LLM 生成器
     # 这里的模型和 base_url 可根据需要更改，或者依赖环境变量 OPENAI_API_KEY
-    llm_generator = LLMStrategyGenerator()
+    generator = LLMStrategyGenerator()
     
-    # 如果策略配置文件不存在，则通过一句话自动生成
-    if not os.path.exists(config_path):
-        print("未找到策略配置，正在通过 LLM 生成...")
-        prompt = "我想要一个低市盈率的价值策略，选出行业内市盈率最低的20只股票，调仓周期为30天，测试时间从2021年1月1日到2023年12月31日"
-        strategy_config = llm_generator.generate(prompt, config_path)
+    if args.prompt or args.interactive or not os.path.exists(config_path):
+        print("正在通过 LLM 生成策略配置...")
+        strategy_config = generator.generate(prompt, config_path)
     else:
         print("发现已存在的策略配置，直接读取。")
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -205,9 +230,9 @@ def main():
         return
         
     # 根据策略配置动态生成/复用 字段映射文件 (mapping_result.json)
-    if not os.path.exists(mapping_file):
-        print("未找到字段映射文件，正在通过 LLM 自动匹配真实数据表...")
-        success = llm_generator.generate_mapping(strategy_config, csv_files, mapping_file)
+    if args.prompt or args.interactive or not os.path.exists(mapping_file):
+        print("未找到字段映射文件或需要重新生成，正在通过 LLM 自动匹配真实数据表...")
+        success = generator.generate_mapping(strategy_config, csv_files, mapping_file)
         if not success:
             print("字段映射生成失败。")
             return
@@ -226,7 +251,9 @@ def main():
     )
     
     rebalance_result = strategy.run()
-    strategy.save_results(rebalance_result, 'qlib_premium_value_strategy_result.csv')
+    strategy.save_results(rebalance_result, args.trade_file)
+    print(f"调仓表已保存至: {args.trade_file}")
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args)

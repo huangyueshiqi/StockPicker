@@ -26,6 +26,7 @@ class GlobalParams(BaseModel):
     end_date: str = Field(default="20240101", description="回测结束日期 YYYYMMDD")
     rebalance_period: int = Field(default=20, description="调仓周期(天)")
     folder_name: str = Field(default="generated_strategy", description="输出文件夹名称")
+    lookback_years: int = Field(default=5, description="数据回看窗口(年)，用于需要历史窗口计算的指标(如3年CAGR)")
 
 class FilterConfig(BaseModel):
     type: str = Field(..., description="过滤器类型: 'simple', 'range', 'rank', 'rank_range'")
@@ -82,6 +83,7 @@ LLM_STRATEGY_PROMPT = """
 策略配置需要包含以下主要模块：
 1. `name` 和 `description`: 策略的基本信息。
 2. `global_params`: 包含 top_K (最大选股数量), start_date, end_date, rebalance_period, folder_name 等。
+   - 额外要求：请给出 lookback_years（数据回看窗口，单位年）。如果策略包含“X年复合增长率/过去X年均值/长期波动率”等需要历史窗口的指标，lookback_years 至少覆盖该窗口；否则可使用默认 5 年。
 3. `filters`: 筛选条件列表。支持的 type 有 'simple', 'range', 'rank', 'rank_range'。
    - 'simple': 需要 column, operator (>, >=, <, <=, ==), threshold
    - 'range': 需要 column, min_value, max_value

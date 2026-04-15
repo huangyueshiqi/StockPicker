@@ -51,6 +51,9 @@ class QlibDataReader(BaseDataReader):
                  mapping_file: str,
                  stock_pool_file: str,
                  macro_file: str,
+                 backtest_start_date: Optional[str] = None,
+                 backtest_end_date: Optional[str] = None,
+                 lookback_years: int = 5,
                  model: str = "deepseek-v3",
                  base_url: str = "http://172.21.16.9/ms-r6rcvnnp/v1",
                  api_key: str = "key",
@@ -86,18 +89,25 @@ class QlibDataReader(BaseDataReader):
         self.inst_stock_file = inst_stock_file
         self.external_data_files = external_data_files
         self.config_path = config_path
+        self.backtest_start_date = backtest_start_date
+        self.backtest_end_date = backtest_end_date
+        self.lookback_years = lookback_years
+        self._prefetch_full_data: Optional[pd.DataFrame] = None
         
         self.price_data_path = price_data_path
         self.fin_data_path = fin_data_path
 
-        # 初始化 LLM
-        self.llm = ChatOpenAI(
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            temperature=temperature,
-            timeout=timeout
-        )
+        self.llm = None
+        try:
+            self.llm = ChatOpenAI(
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
+                temperature=temperature,
+                timeout=timeout
+            )
+        except Exception:
+            self.llm = None
 
         # 定义支持的表名
         self.fin_tables = [
@@ -314,19 +324,44 @@ class QlibDataReader(BaseDataReader):
                 json.dump(config, f, ensure_ascii=False, indent=2)
 
     def read_data(self, start_date: str = None, end_date: str = None) -> Dict[str, pd.DataFrame]:
-        """
-        实现 BaseDataReader 接口：获取 Qlib、宏观、外部数据并合并
-        
-        参数:
-            start_date: 开始日期 (YYYYMMDD)
-            end_date: 结束日期 (YYYYMMDD)
-            
-        返回:
-            包含合并后数据的字典，键为 'qlib_data'
-        """
         logger.info(f"QlibDataReader 开始读取数据，时间范围: {start_date} 至 {end_date}")
-        
-        # 1. 解析映射文件和股票池
+
+        if self.backtest_start_date and self.backtest_end_date and self.lookback_years and end_date:
+            if self._prefetch_full_data is None:
+                try:
+                    from datetime import datetime
+                    from dateutil.relativedelta import relativedelta
+                    bt_start_dt = datetime.strptime(self.backtest_start_date, "%Y%m%d")
+                    prefetch_start = (bt_start_dt - relativedelta(years=int(self.lookback_years))).strftime("%Y%m%d")
+                except Exception:
+                    prefetch_start = start_date
+
+                self._prefetch_full_data = self._load_merged_data(
+                    start_date=prefetch_start,
+                    end_date=self.backtest_end_date,
+                    filter_end_date=False
+                )
+
+            slice_df = self._prefetch_full_data
+            if 'TRADE_DT' in slice_df.columns and end_date:
+                slice_df = slice_df[slice_df['TRADE_DT'] == end_date].copy()
+
+            return {
+                'qlib_data': slice_df,
+                'listing_data': pd.DataFrame(columns=['S_INFO_WINDCODE', 'LISTING_DATE']),
+                'industry_classification': pd.DataFrame(columns=['STOCKCODE', 'INDECODE']),
+                'industry_dimension': pd.DataFrame(columns=['CODE', 'NAME'])
+            }
+
+        merge_data = self._load_merged_data(start_date=start_date, end_date=end_date, filter_end_date=True)
+        return {
+            'qlib_data': merge_data,
+            'listing_data': pd.DataFrame(columns=['S_INFO_WINDCODE', 'LISTING_DATE']),
+            'industry_classification': pd.DataFrame(columns=['STOCKCODE', 'INDECODE']),
+            'industry_dimension': pd.DataFrame(columns=['CODE', 'NAME'])
+        }
+
+    def _load_merged_data(self, start_date: str, end_date: str, filter_end_date: bool) -> pd.DataFrame:
         with open(self.mapping_file, 'r', encoding='utf-8') as f:
             mapping_results = json.load(f)
             
@@ -337,14 +372,12 @@ class QlibDataReader(BaseDataReader):
 
         merge_data = pd.DataFrame()
 
-        # 2. 读取财务数据
         if fin_fields:
             fin_data = self.read_qlibdata(instruments, fin_fields, 'fin', start_date, end_date)
             fin_data = self.check_nullcols(fin_data)
             if fin_data is not None and not fin_data.empty:
                 merge_data = fin_data
 
-        # 3. 读取价格数据
         if price_fields:
             price_data = self.read_qlibdata(instruments, price_fields, 'price', start_date, end_date)
             price_data = self.check_nullcols(price_data)
@@ -354,7 +387,6 @@ class QlibDataReader(BaseDataReader):
                 else:
                     merge_data = pd.merge(price_data, merge_data, on=['datetime', 'instrument'], how='left')
 
-        # 4. 读取并合并宏观数据
         if macro_fields:
             logger.info(f"合并宏观数据字段: {macro_fields}")
             macro_data = pd.read_csv(self.macro_file)
@@ -372,7 +404,6 @@ class QlibDataReader(BaseDataReader):
             else:
                 merge_data = pd.merge(merge_data, macro_data, on='datetime', how='left')
 
-        # 5. 读取并合并外部数据
         if self.external_data_files:
             logger.info(f"合并外部已生成指标文件: {self.external_data_files}")
             for ext_file in self.external_data_files:
@@ -392,12 +423,10 @@ class QlibDataReader(BaseDataReader):
                     else:
                         logger.warning(f"外部文件 {ext_file} 缺少 'datetime' 列，已跳过")
 
-        # 6. 读取并合并行业数据 (inst_stock)
         if os.path.exists(self.inst_stock_file):
             logger.info(f"正在读取并合并行业信息文件: {self.inst_stock_file}")
             try:
                 inst_df = pd.read_csv(self.inst_stock_file)
-                # 根据新格式重命名列：STOCKCODE -> instrument
                 if 'STOCKCODE' in inst_df.columns:
                     inst_df = inst_df.rename(columns={'STOCKCODE': 'instrument'})
                 elif '股票' in inst_df.columns:
@@ -406,39 +435,20 @@ class QlibDataReader(BaseDataReader):
                 if '行业' in inst_df.columns and 'NAME' not in inst_df.columns:
                     inst_df = inst_df.rename(columns={'行业': 'NAME'})
                 
-                # 检查必需列
                 required_cols = {'instrument', 'NAME', 'BEGINDATE', 'ENDDATE'}
                 if required_cols.issubset(inst_df.columns) and not merge_data.empty:
-                    # 将 BEGINDATE 和 ENDDATE 转为数值类型(YYYYMMDD)以便比较
                     inst_df['BEGINDATE'] = pd.to_numeric(inst_df['BEGINDATE'], errors='coerce').fillna(0)
                     inst_df['ENDDATE'] = pd.to_numeric(inst_df['ENDDATE'], errors='coerce').fillna(99999999)
-                    
-                    # 准备宽表的 datetime 列用于比较 (YYYYMMDD 格式整数)
                     merge_data['temp_date_int'] = merge_data['datetime'].dt.strftime('%Y%m%d').astype(int)
-                    
-                    # 由于行业信息是分时间段生效的，使用 pandasql 或者按条件 merge 较为复杂
-                    # 这里我们先做 instrument 维度的 outer/left join，然后按时间条件过滤
                     inst_subset = inst_df[['instrument', 'NAME', 'BEGINDATE', 'ENDDATE']].copy()
-                    
-                    # 先根据 instrument 合并，这会产生笛卡尔积（一只股票在多个时间段有多个行业记录）
                     merged_with_inst = pd.merge(merge_data, inst_subset, on='instrument', how='left')
-                    
-                    # 过滤出时间匹配的行：BEGINDATE <= 当前数据日期 <= ENDDATE
-                    # 包含NaN的情况（即该股票没有行业数据），直接保留
                     mask_valid_industry = (merged_with_inst['temp_date_int'] >= merged_with_inst['BEGINDATE']) & \
                                           (merged_with_inst['temp_date_int'] <= merged_with_inst['ENDDATE'])
                     mask_no_industry = merged_with_inst['NAME'].isna()
-                    
                     merge_data = merged_with_inst[mask_valid_industry | mask_no_industry].copy()
-                    
-                    # 清理临时列
                     merge_data = merge_data.drop(columns=['temp_date_int', 'BEGINDATE', 'ENDDATE'])
-                    
-                    # 防止因为时间交叠导致重复记录，基于原有的键去重
                     merge_data = merge_data.drop_duplicates(subset=['datetime', 'instrument'])
-                    
                 elif 'instrument' in inst_df.columns and 'NAME' in inst_df.columns:
-                    # 兼容老格式（没有 BEGINDATE/ENDDATE，直接根据 instrument 合并）
                     inst_df = inst_df[['instrument', 'NAME']].drop_duplicates()
                     if not merge_data.empty:
                         merge_data = pd.merge(merge_data, inst_df, on='instrument', how='left')
@@ -449,19 +459,13 @@ class QlibDataReader(BaseDataReader):
         else:
             logger.warning(f"未找到行业信息文件 {self.inst_stock_file}，将缺少行业分类列(NAME)。")
 
-        # 7. 数据清洗
         if not merge_data.empty:
-            # 统一列名以兼容 QuantStockPicker 框架
-            # Qlib 使用 'instrument' 和 'datetime'
-            # QuantStockPicker 使用 'S_INFO_WINDCODE' 和 'TRADE_DT'
             if 'instrument' in merge_data.columns:
                 merge_data = merge_data.rename(columns={'instrument': 'S_INFO_WINDCODE'})
             if 'datetime' in merge_data.columns:
-                # 将 datetime 转为 YYYYMMDD 字符串格式，以匹配原框架
                 merge_data['TRADE_DT'] = merge_data['datetime'].dt.strftime('%Y%m%d')
                 
-            # 过滤只取特定日期（如果 end_date 不为 None）
-            if end_date:
+            if filter_end_date and end_date:
                 merge_data = merge_data[merge_data['TRADE_DT'] == end_date]
 
             value_cols = [col for col in merge_data.columns if col not in ['S_INFO_WINDCODE', 'TRADE_DT', 'datetime']]
@@ -472,15 +476,7 @@ class QlibDataReader(BaseDataReader):
             
         logger.info(f"数据合并完成，数据形状: {merge_data.shape}")
         
-        # 将实际获取到的列名重写回策略配置中，确保筛选条件引用的字段一致
         if not merge_data.empty and hasattr(self, 'config_path') and self.config_path:
             self.rewrite_strategy_config(mapping_results, merge_data.columns)
 
-        # 返回兼容原有框架的字典结构
-        return {
-            'qlib_data': merge_data,
-            # 为了兼容性，可以返回空 DataFrame
-            'listing_data': pd.DataFrame(columns=['S_INFO_WINDCODE', 'LISTING_DATE']), 
-            'industry_classification': pd.DataFrame(columns=['STOCKCODE', 'INDECODE']),
-            'industry_dimension': pd.DataFrame(columns=['CODE', 'NAME'])
-        }
+        return merge_data

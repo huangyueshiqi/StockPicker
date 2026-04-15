@@ -123,6 +123,7 @@ class QlibPremiumValueStrategy(BaseStrategy):
             start_date = start_date or global_params.get('start_date')
             end_date = end_date or global_params.get('end_date')
             rebalance_period = rebalance_period or global_params.get('rebalance_period')
+            lookback_years = global_params.get('lookback_years', 5)
 
             # 复用原有的 Selector，因为其基于 Pipeline，只依赖 DataFrame 中的列名
             stock_selector = PremiumValueStockSelector(
@@ -139,7 +140,10 @@ class QlibPremiumValueStrategy(BaseStrategy):
             mapping_file=mapping_file,
             stock_pool_file=stock_pool_file,
             macro_file=macro_file,
-            config_path=config_path
+            config_path=config_path,
+            backtest_start_date=start_date,
+            backtest_end_date=end_date,
+            lookback_years=lookback_years
         )
         
         data_processor = QlibPremiumValueDataProcessor()

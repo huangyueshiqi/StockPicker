@@ -23,7 +23,7 @@ QuantStockPicker只支持基于配置的选股，必须需要配置文件才能�
 
 ### 策略实现层
 - `premium_value_strategy_old.py`: 实现优质价值策略的具体逻辑，不基于司棋因子生成接口的实现（旧）
-- `premium_value_strategy_new.py`: 实现优质价值策略的具体逻辑，基于司棋因子生成接口的实现（新）
+- `qlib_premium_value_strategy.py`: 实现优质价值策略的具体逻辑，基于Qlib和大模型的智能选股流程（新）
 
 ## 主要功能
 
@@ -79,12 +79,12 @@ stock_selector：基于dataframe和配置文件进行选股
 
 
 ### 运行策略
-1. premium_value_strategy_new.py
+1. `qlib_premium_value_strategy.py`
 2. 运行必须设置的参数：策略选股的开始日期和结束日期;config配置路径
 3. 默认参数：调仓周期(交易日天数)，默认为60天;等权重分配;结果文件路径：当前类名小写+_result.csv
 
 ## 示例策略
-项目中包含一个完整的优质价值策略实现(`premium_value_strategy_new.py`)，可以作为开发新策略的参考。
+项目中包含一个完整的优质价值策略实现(`qlib_premium_value_strategy.py`)，可以作为开发新策略的参考。
 1. 使用`write_factorinfo.ipynb`写入因子信息文件，生成`factor.csv`
 2. 写`premium_value_strategy.json`，json中`name`和`description`可不写
 3. 策略py文件中的main函数上需要`factor_filename`和`config_filename`这两个文件名

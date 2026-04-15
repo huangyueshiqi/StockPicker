@@ -7,7 +7,7 @@ from framework.strategy_framework import (
     BaseFeatureCalculator, BaseStrategy
 )
 from framework.qlib_data_reader import QlibDataReader
-from premium_value_strategy_new import PremiumValueStockSelector
+from framework.stock_selectors import PremiumValueStockSelector
 from tools.llm_strategy_generator import LLMStrategyGenerator
 
 class QlibPremiumValueDataProcessor(BaseDataProcessor):

@@ -39,7 +39,7 @@
 - 存放动态生成的因子计算 Python 脚本（如 `result/prem_value/S_VAL_PE_TTM.py`）以及最终的策略调仓计划输出文件。
 
 ### 2.5 策略实现层 (根目录)
-- **`premium_value_strategy_new.py`**: 官方提供的一个基于新框架实现的“优质价值策略”实例，演示了如何组装上述框架组件。
+- **`qlib_premium_value_strategy.py`**: 官方提供的一个基于新框架实现的“优质价值策略”实例，演示了如何组装上述框架组件。
 - **`write_factorinfo.ipynb`**: 用于编写和生成 `factor.csv` 的 Jupyter 辅助脚本。
 
 ---
@@ -74,7 +74,7 @@
   - 动态导入生成的 Python 模块并计算特定日期的因子数据。
   - 最终合并所有因子为一张带有 `S_INFO_WINDCODE` 和 `TRADE_DT` 的宽表 DataFrame。
 
-### 3.5 `PremiumValueStrategy` (位于 `premium_value_strategy_new.py`)
+### 3.5 `QlibPremiumValueStrategy` (位于 `qlib_premium_value_strategy.py`)
 - **职责**：具体的策略实现入口。
 - **工作机制**：实例化具体的 Reader/Processor 等类，并在 Selector 中传入 `ConfigurableStockSelector`（挂载 `premium_value_strategy.json` 配置），最后调用 `BaseStrategy.run()` 启动回测。
 
@@ -108,12 +108,12 @@
 ### 5.2 编写新策略
 1. **生成因子文件**：使用 `write_factorinfo.ipynb` 定义因子，并生成 `config/factor.csv`。
 2. **编写策略配置**：在 `config/` 下创建策略配置文件（如 `my_strategy.json`），定义 `global_params`、`filters`、`ranking` 及 `weight_allocation`。
-3. **编写策略入口**：参考 `premium_value_strategy_new.py`，实现一个主文件，实例化 `BaseStrategy` 并传入 `ConfigurableStockSelector`（指向你的 JSON 文件）。
+3. **编写策略入口**：参考 `qlib_premium_value_strategy.py`，实现一个主文件，实例化 `BaseStrategy` 并传入 `ConfigurableStockSelector`（指向你的 JSON 文件）。
 
 ### 5.3 运行与调试
 1. **启动回测**：直接运行策略入口脚本。
    ```bash
-   python premium_value_strategy_new.py
+   python qlib_premium_value_strategy.py
    ```
 2. **重算因子**：由于 `FactorLoader` 会缓存生成的因子 Python 文件。如果因子计算逻辑变更或数据报错，需要手动前往 `result/[folder_name]/` 目录下删除对应的 `.py` 文件，下次运行时系统将自动重新生成。
 3. **输出**：运行结束后，策略将在当前目录输出 CSV 格式的调仓记录表（如 `premiumvaluestrategy_result.csv`）。

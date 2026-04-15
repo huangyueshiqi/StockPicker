@@ -5,11 +5,14 @@ from pathlib import Path
 from typing import Dict, Optional, List
 
 import pandas as pd
-import qlib
-from qlib.data import D
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
+try:
+    import qlib
+    from qlib.data import D
+    from langchain_openai import ChatOpenAI
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import JsonOutputParser
+except ImportError:
+    pass
 from pydantic import BaseModel, Field, RootModel
 
 from framework.strategy_framework import BaseDataReader

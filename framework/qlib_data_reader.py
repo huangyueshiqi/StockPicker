@@ -13,18 +13,31 @@ try:
     from langchain_core.output_parsers import JsonOutputParser
 except ImportError:
     pass
-from pydantic import BaseModel, Field, RootModel
+try:
+    from pydantic import BaseModel, Field, RootModel
+except ImportError:
+    BaseModel = object
+    RootModel = object
+    def Field(*args, **kwargs):
+        return None
 
 from framework.strategy_framework import BaseDataReader
+from framework.derived_feature_calculator import apply_derived_features
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('QlibDataLoader')
 
 
-class FieldFillStrategies(RootModel[Dict[str, str]]):
-    """定义字段填充策略的数据模型"""
-    root: Dict[str, str] = Field(..., description="列名与对应的填充策略映射（'0' 或 'ffill'）")
+try:
+    _ = RootModel[Dict[str, str]]
+
+    class FieldFillStrategies(RootModel[Dict[str, str]]):
+        root: Dict[str, str] = Field(..., description="列名与对应的填充策略映射（'0' 或 'ffill'）")
+except Exception:
+
+    class FieldFillStrategies(BaseModel):
+        root: Dict[str, str] = Field(default_factory=dict, description="列名与对应的填充策略映射（'0' 或 'ffill'）")
 
 
 # 定义 LLM 提示模板
@@ -464,6 +477,46 @@ class QlibDataReader(BaseDataReader):
                 merge_data = merge_data.rename(columns={'instrument': 'S_INFO_WINDCODE'})
             if 'datetime' in merge_data.columns:
                 merge_data['TRADE_DT'] = merge_data['datetime'].dt.strftime('%Y%m%d')
+
+            derived_features = []
+            if self.config_path and os.path.exists(self.config_path):
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                    derived_features = config.get("derived_features") or []
+                except Exception:
+                    derived_features = []
+
+            if derived_features:
+                field_to_actual = {}
+                for mapping in mapping_results.get("mappings", []):
+                    strategy_field = mapping.get("strategy_field")
+                    for field_info in mapping.get("related_fields", []):
+                        table_name = field_info.get("table_name", "").lower()
+                        mapped_field = field_info.get("field_name", "")
+                        possible_cols = []
+                        if table_name in self.fin_tables_lower:
+                            possible_cols = [f"cor_{mapped_field}_{table_name}", f"adj_{mapped_field}_{table_name}"]
+                        elif table_name in self.price_tables_lower:
+                            if mapped_field in ["close"]:
+                                possible_cols = [f"{mapped_field}"]
+                            else:
+                                possible_cols = [f"{mapped_field}_{table_name}"]
+                        elif table_name in ["宏观"]:
+                            possible_cols = [mapped_field]
+
+                        for p_col in possible_cols:
+                            if p_col in merge_data.columns:
+                                field_to_actual[strategy_field] = p_col
+                                break
+                        if strategy_field in field_to_actual:
+                            break
+
+                merge_data = apply_derived_features(
+                    df=merge_data,
+                    derived_features=derived_features,
+                    field_to_actual=field_to_actual,
+                )
                 
             if filter_end_date and end_date:
                 merge_data = merge_data[merge_data['TRADE_DT'] == end_date]

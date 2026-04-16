@@ -4,12 +4,23 @@ import json
 import csv
 import logging
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+try:
+    from pydantic import BaseModel, Field
+except ImportError:
+    BaseModel = object
+    def Field(*args, **kwargs):
+        return None
 import argparse
 
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
+try:
+    from langchain_openai import ChatOpenAI
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import JsonOutputParser
+except ImportError:
+    ChatOpenAI = None
+    ChatPromptTemplate = None
+    JsonOutputParser = None
+from tools.strategy_field_utils import extract_required_fields
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -236,30 +247,7 @@ class LLMStrategyGenerator:
         return all_fields
 
     def extract_required_fields(self, strategy_config: Dict) -> List[str]:
-        """
-        从生成的策略配置中提取所有需要的字段
-        """
-        required_fields = set()
-        
-        # 1. 提取 Filters 中的列
-        for f in strategy_config.get('filters', []):
-            if 'column' in f: required_fields.add(f['column'])
-            
-        # 2. 提取 Ranking 中的列
-        ranking = strategy_config.get('ranking', {})
-        if 'column' in ranking:
-            required_fields.add(ranking['column'])
-            
-        for comp in ranking.get('components', []):
-            if 'column' in comp: required_fields.add(comp['column'])
-            
-        # 3. 基础必加字段 (供 QlibDataReader 或主框架使用)
-        required_fields.add('close') # 用于价格处理
-        
-        excluded_fields = {'NAME'}
-        required_fields = {f for f in required_fields if f not in excluded_fields}
-        
-        return list(required_fields)
+        return extract_required_fields(strategy_config)
 
     def generate_mapping(self, strategy_config: Dict, csv_files: List[str], mapping_output_file: str) -> bool:
         """

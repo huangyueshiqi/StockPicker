@@ -30,6 +30,24 @@ logger = logging.getLogger('LLMStrategyGenerator')
 # 1. 策略配置生成相关模型与 Prompt
 # ==========================================
 
+def normalize_strategy_config(strategy_config: Dict[str, Any]) -> Dict[str, Any]:
+    if strategy_config is None:
+        return {}
+
+    cfg = dict(strategy_config)
+    gp = dict(cfg.get("global_params") or {})
+    if "lookback_years" not in gp or gp["lookback_years"] is None:
+        gp["lookback_years"] = 5
+    cfg["global_params"] = gp
+
+    derived = cfg.get("derived_features")
+    if derived is None:
+        derived = []
+    if not isinstance(derived, list):
+        derived = []
+    cfg["derived_features"] = derived
+    return cfg
+
 
 class GlobalParams(BaseModel):
     top_K: int = Field(default=20, description="最大选股数量")
@@ -76,10 +94,18 @@ class WeightAllocation(BaseModel):
     name: str = Field(default="等权重分配", description="名称")
     description: str = Field(default="为同一调仓日中股票分配相同权重", description="描述")
 
+class DerivedFeatureConfig(BaseModel):
+    column: str = Field(..., description="派生特征列名(英文)，用于 filters/ranking 引用，例如 revenue_cagr_3y")
+    description: str = Field(default="", description="派生特征中文描述")
+    type: str = Field(..., description="派生特征类型，目前支持 'cagr'")
+    base_column: str = Field(..., description="底层字段名(Wind/Qlib风格)，需要映射到Qlib实际列名，例如 S_FA_OPERATEINCOME")
+    years: Optional[int] = Field(default=None, description="窗口年数，例如 3")
+
 class StrategyConfigSchema(BaseModel):
     name: str = Field(..., description="策略名称")
     description: str = Field(..., description="策略描述")
     global_params: GlobalParams = Field(..., description="全局参数")
+    derived_features: List[DerivedFeatureConfig] = Field(default_factory=list, description="派生特征定义列表")
     filters: List[FilterConfig] = Field(..., description="过滤器列表")
     ranking: Ranking = Field(..., description="打分排序配置")
     weight_allocation: WeightAllocation = Field(default_factory=WeightAllocation, description="权重分配配置")
@@ -95,6 +121,15 @@ LLM_STRATEGY_PROMPT = """
 1. `name` 和 `description`: 策略的基本信息。
 2. `global_params`: 包含 top_K (最大选股数量), start_date, end_date, rebalance_period, folder_name 等。
    - 额外要求：请给出 lookback_years（数据回看窗口，单位年）。如果策略包含“X年复合增长率/过去X年均值/长期波动率”等需要历史窗口的指标，lookback_years 至少覆盖该窗口；否则可使用默认 5 年。
+3. `derived_features`: 派生特征定义列表，用于支持需要历史窗口计算的指标。
+   - 当用户提到“营业收入3年复合增长率/利润5年CAGR/过去3年均值”等无法直接从单日截面取到的指标时，必须在 derived_features 中定义对应派生列。
+   - 每个派生特征必须包含：
+     - column: 派生后最终列名(英文)，供 filters/ranking 引用，例如 revenue_cagr_3y
+     - description: 中文描述
+     - type: 目前使用 cagr
+     - base_column: 底层字段名（Wind/Qlib风格，例如 S_FA_OPERATEINCOME），该字段会被映射到Qlib实际列名（PIT口径 cor/adj）
+     - years: 年数窗口，例如 3
+   - filters/ranking 中如果要使用派生指标，column 必须引用 derived_features 的 column，而不是 base_column。
 3. `filters`: 筛选条件列表。支持的 type 有 'simple', 'range', 'rank', 'rank_range'。
    - 'simple': 需要 column, operator (>, >=, <, <=, ==), threshold
    - 'range': 需要 column, min_value, max_value
@@ -189,19 +224,20 @@ class LLMStrategyGenerator:
         """
         logger.info(f"正在分析用户描述并生成策略配置...")
         
+        if JsonOutputParser is None or ChatPromptTemplate is None:
+            raise RuntimeError("缺少 langchain 依赖，无法生成策略配置")
         parser = JsonOutputParser(pydantic_object=StrategyConfigSchema)
         prompt = ChatPromptTemplate.from_template(
             template=LLM_STRATEGY_PROMPT,
             partial_variables={"format_instructions": parser.get_format_instructions()}
         )
-        
         chain = prompt | self.llm | parser
         
         try:
             strategy_config = chain.invoke({"user_input": user_input})
+            cleaned_config = normalize_strategy_config(strategy_config)
             
             # 排除掉 None 值
-            cleaned_config = strategy_config.copy()
             for filter_item in cleaned_config.get("filters", []):
                 for k in list(filter_item.keys()):
                     if filter_item[k] is None:
@@ -211,6 +247,11 @@ class LLMStrategyGenerator:
             for k in list(ranking.keys()):
                 if ranking[k] is None:
                     del ranking[k]
+
+            for d in cleaned_config.get("derived_features", []) or []:
+                for k in list(d.keys()):
+                    if d[k] is None:
+                        del d[k]
             
             # 将生成的配置保存为 JSON 文件
             os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)

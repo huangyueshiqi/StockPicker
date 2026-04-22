@@ -6,6 +6,7 @@ import logging
 import sys
 import time
 import subprocess
+import shutil
 
 from framework.strategy_framework import (
     BaseDataProcessor, BaseStockFilter,
@@ -114,7 +115,12 @@ class QlibPremiumValueStrategy(BaseStrategy):
             if config_filename is None:
                 config_filename = "premium_value_strategy.json"
 
-            config_path = os.path.join(config_dir, config_filename)
+            original_config_path = os.path.join(config_dir, config_filename)
+            config_path = os.path.join(config_dir, "run_" + config_filename)
+            
+            # 为了防止重写原始策略文件（内置配置或 LLM 缓存配置），创建一个运行时的副本
+            if os.path.exists(original_config_path):
+                shutil.copy(original_config_path, config_path)
 
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)

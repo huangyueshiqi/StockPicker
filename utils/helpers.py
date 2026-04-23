@@ -1,4 +1,8 @@
-import cx_Oracle
+try:
+    import cx_Oracle
+except ImportError:
+    cx_Oracle = None
+
 import pandas as pd
 import numpy as np
 from contextlib import contextmanager

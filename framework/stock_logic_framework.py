@@ -2,9 +2,6 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable
 
-import setuptools.command.install
-
-
 class FilterCondition:
     """
     筛选条件基类
@@ -413,14 +410,17 @@ class MultiSimpleRankMethod(RankMethod):
         rank_columns = []
         for method in self.rank_methods:
             if method.scope == "market":
-                rank_columns.append(f"{method.column}_rank")
+                rank_col = f"{method.column}_rank"
             else:
-                rank_columns.append(f"{method.column}_industry_rank")
+                rank_col = f"{method.column}_industry_rank"
+
+            if rank_col in result.columns:
+                rank_columns.append(rank_col)
 
         if not rank_columns:
             return result
 
-        result['composite_rank'] =result[rank_columns].sum(axis=1)
+        result['composite_rank'] = result[rank_columns].sum(axis=1)
 
         #对综合排名再次排序，获得最终排名(升序：值越小排名越高)
         result['final_rank'] = result['composite_rank'].rank(method='min', ascending=True)

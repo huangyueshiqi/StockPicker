@@ -254,10 +254,12 @@ class BaseStrategy(abc.ABC):
         """
         data = []
         for date, stocks in zip(rebalance_dates, stock_lists):
+            # 将 YYYYMMDD 格式的日期转换为 YYYY-MM-DD
+            formatted_date = f"{date[:4]}-{date[4:6]}-{date[6:]}" if len(date) == 8 else date
             for stock in stocks:
                 data.append({
-                    'date': date,
-                    'stock': stock
+                    'datetime': formatted_date,
+                    'instrument': stock
                 })
         return pd.DataFrame(data)
     

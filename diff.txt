@@ -1,0 +1,1151 @@
+diff --git a/Wiki.md b/Wiki.md
+new file mode 100644
+index 0000000..2e14d64
+--- /dev/null
++++ b/Wiki.md
+@@ -0,0 +1,119 @@
++# QuantStockPicker 项目 Code Wiki
++
++## 1. 项目概述与整体架构
++
++**QuantStockPicker** 是一个基于 Python 的量化选股系统。该系统采用高度模块化、组件化和数据驱动的设计，主要支持基于 JSON/YAML 配置文件的策略回测与选股。
++
++### 1.1 核心执行流程
++系统的核心基于流水线（Pipeline）模式，单次调仓周期的完整执行流程被抽象为 5 个标准化步骤：
++1. **数据读取 (Data Reader)**：连接 Oracle 数据库、加载动态因子数据，返回原始数据字典。
++2. **数据预处理 (Data Processor)**：清洗数据，如去重、处理 NaN 值等。
++3. **股票初步筛选 (Stock Filter)**：基于基础属性（如上市时间等）进行初步股票池过滤。
++4. **特征计算 (Feature Calculator)**：合并行情、行业分类以及各类因子数据，生成完整的特征宽表 (DataFrame)。
++5. **股票选择与权重分配 (Stock Selector)**：基于配置文件定义的逻辑（简单筛选、区间筛选、各种排名、权重分配）选出最终股票并分配仓位权重。
++
++### 1.2 架构特点
++- **配置驱动**：策略逻辑（如阈值、排序方式、权重分配）从代码中解耦，通过 JSON 配置文件定义。
++- **动态因子加载**：通过调用外部大模型或规则生成系统（司棋因子生成接口），动态生成并执行因子计算的 Python 脚本。
++- **可扩展性**：所有的核心组件均定义了抽象基类（`abc.ABC`），新增策略只需继承并实现对应的组件方法即可。
++
++---
++
++## 2. 主要模块职责
++
++### 2.1 配置层 (`config/`)
++- **`*.json` / `*.yaml`**: 策略配置文件（如 `premium_value_strategy.json`），定义选股过滤条件、排序逻辑、持仓权重及调仓参数等。
++- **`factor.csv`**: 因子信息表，定义了策略需要使用的所有因子及其计算公式/含义。
++
++### 2.2 框架层 (`framework/`)
++- **`strategy_framework.py`**: 定义了系统的骨架，包括 5 大核心组件基类（`BaseDataReader`, `BaseDataProcessor`, `BaseStockFilter`, `BaseFeatureCalculator`, `BaseStockSelector`）以及策略统筹基类 `BaseStrategy`。
++- **`stock_logic_framework.py`**: 实现了核心的选股逻辑引擎，包含各种类型的筛选条件（如 `SimpleFilterCondition`, `RankFilterCondition`）、排序方法（如 `SimpleRankMethod`, `MultiSimpleRankMethod`）和权重分配器（如 `EqualWeightAllocator`），以及将它们串联起来的 `StockFilterPipeline`。
++- **`strategy_config.py`**: 配置解析与工厂模块。包含 `StrategyConfigLoader`（加载 JSON/YAML）和 `StrategyFactory`（根据配置实例化对应的 Filter、Rank、Weight 对象）。
++- **`configurable_strategy.py`**: 提供了 `ConfigurableStockSelector`，作为 `BaseStockSelector` 的具体实现，它内部调用配置工厂来完成动态选股逻辑。
++- **`factor_loader.py`**: 负责因子的动态生成与加载计算。调用外部 `FactorCodeGenerator` 动态生成因子脚本，执行计算并合并为特征宽表。
++
++### 2.3 工具层 (`utils/`)
++- **`helpers.py`**: 提供通用的数据库查询执行函数（`execute_query`）、交易日计算逻辑（`rebalancing_day`, `rebalancing_by_period`）、数据清洗以及股票基础属性获取的辅助函数。
++
++### 2.4 结果层 (`result/`)
++- 存放动态生成的因子计算 Python 脚本（如 `result/prem_value/S_VAL_PE_TTM.py`）以及最终的策略调仓计划输出文件。
++
++### 2.5 策略实现层 (根目录)
++- **`premium_value_strategy_new.py`**: 官方提供的一个基于新框架实现的“优质价值策略”实例，演示了如何组装上述框架组件。
++- **`write_factorinfo.ipynb`**: 用于编写和生成 `factor.csv` 的 Jupyter 辅助脚本。
++
++---
++
++## 3. 关键类与函数说明
++
++### 3.1 `framework.strategy_framework.BaseStrategy`
++- **职责**：策略流程的总控制器。
++- **核心方法 `run()`**：
++  - 根据指定的开始、结束日期和调仓周期计算所有调仓日。
++  - 遍历每个调仓日，依次调用注入的 Reader -> Processor -> Filter -> FeatureCalculator -> Selector。
++  - 将每个调仓日的选股结果汇总，最终通过 `_generate_rebalance_table` 返回完整的调仓计划 DataFrame。
++
++### 3.2 `framework.stock_logic_framework.StockFilterPipeline`
++- **职责**：执行配置中定义的股票筛选与排序逻辑。
++- **核心方法 `run(data, top_k)`**：
++  - 遍历所有的 `FilterCondition` 求交集，剔除不符合条件的股票。
++  - 应用 `RankMethod` 对剩余股票打分排序，并截取前 `top_k`。
++  - 交由 `WeightAllocator` 给选出的股票分配仓位权重。
++
++### 3.3 `framework.strategy_config.StrategyFactory`
++- **职责**：基于配置的反射工厂。
++- **核心方法 `create_filter_pipeline()`**：
++  - 读取解析好的配置字典，根据 `type` 字段（如 `simple`, `rank`, `range`）实例化对应的 FilterCondition 和 RankMethod。
++  - 组装并返回一个可执行的 `StockFilterPipeline` 对象。
++
++### 3.4 `framework.factor_loader.FactorLoader`
++- **职责**：自动化管理因子的生成与加载。
++- **核心方法 `load_and_calculate(date)`**：
++  - 加载 `factor.csv` 列表。
++  - 若因子脚本不存在，则调用大模型代码生成器（`FactorCodeGenerator`）生成计算代码。
++  - 动态导入生成的 Python 模块并计算特定日期的因子数据。
++  - 最终合并所有因子为一张带有 `S_INFO_WINDCODE` 和 `TRADE_DT` 的宽表 DataFrame。
++
++### 3.5 `PremiumValueStrategy` (位于 `premium_value_strategy_new.py`)
++- **职责**：具体的策略实现入口。
++- **工作机制**：实例化具体的 Reader/Processor 等类，并在 Selector 中传入 `ConfigurableStockSelector`（挂载 `premium_value_strategy.json` 配置），最后调用 `BaseStrategy.run()` 启动回测。
++
++---
++
++## 4. 依赖关系
++
++### 4.1 内部依赖
++- `ConfigurableStockSelector` 强依赖 `StrategyFactory` 和 `StockFilterPipeline`。
++- `PremiumValueDataReader` 强依赖 `FactorLoader` 提供因子数据。
++
++### 4.2 外部库依赖
++- **核心数据处理**：`pandas`, `numpy`
++- **配置与系统工具**：`json`, `yaml`, `os`, `sys`, `importlib`
++- **数据库连接**：`cx_Oracle` (需系统环境变量支持)
++- **特定外部接口**：系统高度依赖位于外部路径（如 `/home/quant/wsq/wsq/langchain_test/refactor`）的 `FactorCodeGenerator` 来实现因子的动态生成。
++
++---
++
++## 5. 项目运行方式
++
++### 5.1 环境准备
++1. 确保在 57 服务器的 `zcenv` 环境下运行。
++2. 配置 Oracle 客户端环境变量以避免数据库连接错误：
++   ```bash
++   export LD_LIBRARY_PATH=/oracle/client:/home/quant/oracle
++   export ORACLE_HOME=/oracle/client
++   ```
++3. 在 `utils/helpers.py` 中确认 Oracle 数据库（WIND, JYLH, FINCHINA）连接配置已正确填写。
++
++### 5.2 编写新策略
++1. **生成因子文件**：使用 `write_factorinfo.ipynb` 定义因子，并生成 `config/factor.csv`。
++2. **编写策略配置**：在 `config/` 下创建策略配置文件（如 `my_strategy.json`），定义 `global_params`、`filters`、`ranking` 及 `weight_allocation`。
++3. **编写策略入口**：参考 `premium_value_strategy_new.py`，实现一个主文件，实例化 `BaseStrategy` 并传入 `ConfigurableStockSelector`（指向你的 JSON 文件）。
++
++### 5.3 运行与调试
++1. **启动回测**：直接运行策略入口脚本。
++   ```bash
++   python premium_value_strategy_new.py
++   ```
++2. **重算因子**：由于 `FactorLoader` 会缓存生成的因子 Python 文件。如果因子计算逻辑变更或数据报错，需要手动前往 `result/[folder_name]/` 目录下删除对应的 `.py` 文件，下次运行时系统将自动重新生成。
++3. **输出**：运行结束后，策略将在当前目录输出 CSV 格式的调仓记录表（如 `premiumvaluestrategy_result.csv`）。
+\ No newline at end of file
+diff --git a/framework/__pycache__/qlib_data_reader.cpython-314.pyc b/framework/__pycache__/qlib_data_reader.cpython-314.pyc
+new file mode 100644
+index 0000000..f39b8e9
+Binary files /dev/null and b/framework/__pycache__/qlib_data_reader.cpython-314.pyc differ
+diff --git a/framework/qlib_data_reader.py b/framework/qlib_data_reader.py
+new file mode 100644
+index 0000000..1df2164
+--- /dev/null
++++ b/framework/qlib_data_reader.py
+@@ -0,0 +1,410 @@
++import os
++import json
++import logging
++from pathlib import Path
++from typing import Dict, Optional, List
++
++import pandas as pd
++import qlib
++from qlib.data import D
++from langchain_openai import ChatOpenAI
++from langchain_core.prompts import ChatPromptTemplate
++from langchain_core.output_parsers import JsonOutputParser
++from pydantic import BaseModel, Field, RootModel
++
++from framework.strategy_framework import BaseDataReader
++
++# 配置日志
++logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
++logger = logging.getLogger('QlibDataLoader')
++
++
++class FieldFillStrategies(RootModel[Dict[str, str]]):
++    """定义字段填充策略的数据模型"""
++    root: Dict[str, str] = Field(..., description="列名与对应的填充策略映射（'0' 或 'ffill'）")
++
++
++# 定义 LLM 提示模板
++LLM_PREPROCESS_PROMPT_TEMPLATE = """
++你是一个金融数据预处理专家。请根据以下目标字段和参考信息，为每个字段建议一个缺失值填充策略。
++策略只能是 "0"（填充为0）或 "ffill"（前向填充）。
++通常：
++- 财务指标（如收入、利润）如果是缺失，更可能是0，建议用 "0"
++- 价格、估值指标、宏观经济数据如果缺失，更可能需要用前值，建议用 "ffill"
++
++目标字段: {target_fields_str}
++参考信息: {reference_info}
++
++请返回JSON格式，键为字段名，值为策略("0" 或 "ffill")。
++"""
++
++
++class QlibDataReader(BaseDataReader):
++    """
++    基于 Qlib 的数据读取器，实现 BaseDataReader 接口
++    替换原有的基于 Oracle 数据库的读取逻辑
++    """
++    def __init__(self,
++                 mapping_file: str,
++                 stock_pool_file: str,
++                 macro_file: str,
++                 model: str = "deepseek-v3",
++                 base_url: str = "http://172.21.16.9/ms-r6rcvnnp/v1",
++                 api_key: str = "key",
++                 temperature: float = 0.2,
++                 timeout: float = 240.0,
++                 price_data_path: str = "/home/quant/zc/finance_deal/qlib_data/price_data0821",
++                 fin_data_path: str = "/home/quant/zc/finance_deal/qlib_data/pit_data",
++                 inst_stock_file: str = "documents/inst_stock.csv",
++                 external_data_files: Optional[List[str]] = None):
++        """
++        初始化 Qlib 数据读取器
++        
++        参数:
++            mapping_file: 字段映射 JSON 文件路径
++            stock_pool_file: 股票池 JSON 文件路径
++            macro_file: 宏观数据 CSV 文件路径
++            model: LLM 模型名称
++            base_url: LLM API 基础 URL
++            api_key: LLM API Key
++            temperature: LLM 温度参数
++            timeout: LLM 超时时间
++            price_data_path: Qlib 价格数据路径
++            fin_data_path: Qlib 财务数据路径
++            inst_stock_file: 包含行业信息的 CSV 文件路径
++            external_data_files: 外部数据文件列表
++        """
++        self.need_start_date = True  # 该读取器可能需要时间段来拉取序列数据
++        self.mapping_file = mapping_file
++        self.stock_pool_file = stock_pool_file
++        self.macro_file = macro_file
++        self.inst_stock_file = inst_stock_file
++        self.external_data_files = external_data_files
++        
++        self.price_data_path = price_data_path
++        self.fin_data_path = fin_data_path
++
++        # 初始化 LLM
++        self.llm = ChatOpenAI(
++            model=model,
++            base_url=base_url,
++            api_key=api_key,
++            temperature=temperature,
++            timeout=timeout
++        )
++
++        # 定义支持的表名
++        self.fin_tables = [
++            "ASHARECASHFLOW", "ASHARECASHFLOWHIS", "ASHAREBALANCESHEET", 
++            "ASHAREBALANCESHEETHIS", "ASHAREINCOME", "ASHAREINCOMEHIS", 
++            "ASHARETTMHIS", "ASHARECONSENSUSINDEXHIS", "ASHAREPROFITEXPRESSHIS", 
++            "ASHAREFINANCIALINDICATOR"
++        ]
++        self.price_tables = [
++            "ASHAREEODPRICES", "AShareAuction", "AShareEODDerivativeIndicator", 
++            "AShareEODPricesMKT", "AShareEVIndicator", "AShareEnergyindex", 
++            "AShareEnergyindexADJ", "AShareL2Indicators", "AShareMoneyFlow", 
++            "AShareTechIndicators", "AShareValuationIndicator", "AShareYield", 
++            "AShareswingReversetrend", "AShareswingReversetrendADJ", 
++            "Ashareintensitytrend", "AshareintensitytrendADJ", 
++            "AsharesFndfactor_ConFcst", "DailyValuationFactor", 
++            "PITFinancialFactor", "RevenueTechnicalFactor"
++        ]
++        
++        # 将表名转小写
++        self.fin_tables_lower = {name.lower() for name in self.fin_tables}
++        self.price_tables_lower = {name.lower() for name in self.price_tables}
++
++    def preprocess_with_llm(self, df: pd.DataFrame, field_descriptions: dict = None) -> pd.DataFrame:
++        """使用 LLM 处理缺失值"""
++        valid_fields = [f for f in df.columns if f not in ['datetime', 'instrument', 'TRADE_DT', 'S_INFO_WINDCODE']]
++        logger.info(f"正在使用 LLM 为字段 {valid_fields} 生成缺失值处理策略...")
++
++        target_fields_str = ", ".join(valid_fields)
++        reference_info = json.dumps(field_descriptions, ensure_ascii=False, indent=2) if field_descriptions else "无额外描述信息"
++
++        prompt = ChatPromptTemplate.from_template(LLM_PREPROCESS_PROMPT_TEMPLATE)
++        parser = JsonOutputParser(pydantic_object=FieldFillStrategies)
++
++        chain = prompt | self.llm | parser
++
++        try:
++            strategies = chain.invoke({"target_fields_str": target_fields_str, "reference_info": reference_info})
++
++            # 兼容 Pydantic v1/v2 的返回格式
++            if hasattr(strategies, 'root'):
++                strategies_dict = strategies.root
++            elif hasattr(strategies, '__root__'):
++                strategies_dict = strategies.__root__
++            elif isinstance(strategies, dict):
++                strategies_dict = strategies
++            else:
++                dumped = strategies.model_dump() if hasattr(strategies, 'model_dump') else strategies.dict()
++                strategies_dict = dumped.get('root', dumped.get('__root__', dumped))
++
++            logger.info(f"LLM建议的填充策略: {strategies_dict}")
++
++            # Apply strategies
++            df_processed = df.copy()
++            for col, strategy in strategies_dict.items():
++                if col in df_processed.columns:
++                    if strategy == "0":
++                        df_processed[col] = df_processed[col].fillna(0)
++                    elif strategy == "ffill":
++                        df_processed[col] = df_processed[col].fillna(method='ffill')
++            return df_processed
++
++        except Exception as e:
++            logger.info(f"LLM预处理失败: {e}")
++            return df
++
++    def json_parse(self, results: dict):
++        """解析映射 JSON"""
++        fin_fields = set()
++        price_fields = set()
++        macro_fields = set()
++        desc_dict = {}
++        
++        for mapping in results.get('mappings', []):
++            for field_info in mapping.get('related_fields', []):
++                table_name = field_info.get('table_name', '').lower()
++                mapped_field = field_info.get('field_name', '')
++                desc_info = field_info.get('description', '')
++                desc_dict[mapped_field] = desc_info
++
++                if table_name in self.fin_tables_lower:
++                    mapped_field1 = f'$cor_{mapped_field}_{table_name}'
++                    mapped_field2 = f'$adj_{mapped_field}_{table_name}'
++                    fin_fields.add(mapped_field1)
++                    fin_fields.add(mapped_field2)
++                elif table_name in self.price_tables_lower:
++                    mapped_field1 = f'${mapped_field}_{table_name}'
++                    if mapped_field in ['close']:
++                        mapped_field1 = f'${mapped_field}'
++                    price_fields.add(mapped_field1)
++                elif table_name in ['宏观']:
++                    macro_fields.add(mapped_field)
++                    
++        return sorted(fin_fields), sorted(price_fields), sorted(macro_fields), desc_dict
++
++    def read_qlibdata(self, instruments: list, fields: list, data_type: str, start_time: str, end_time: str) -> pd.DataFrame:
++        """从 Qlib 读取数据"""
++        if not fields:
++            return None
++            
++        # 格式化日期 (从 YYYYMMDD 转为 YYYY-MM-DD)
++        start_time_fmt = f"{start_time[:4]}-{start_time[4:6]}-{start_time[6:]}" if start_time else None
++        end_time_fmt = f"{end_time[:4]}-{end_time[4:6]}-{end_time[6:]}"
++            
++        if data_type == 'price':
++            qlib.init(provider_uri=self.price_data_path)
++            # 在指定时间范围内获取数据
++            data = D.features(
++                instruments=instruments,
++                fields=fields,
++                start_time=start_time_fmt,
++                end_time=end_time_fmt,
++                freq='day',
++            )
++            data = data.reset_index()
++
++        elif data_type == 'fin':
++            qlib.init(provider_uri=self.fin_data_path)
++            data = D.features(
++                instruments=instruments,
++                fields=fields,
++                start_time=start_time_fmt,
++                end_time=end_time_fmt,
++                freq='day',
++            )
++            data = data.reset_index()
++            
++        if data is None or data.empty:
++            return data
++            
++        # 清洗列名
++        original_columns = data.columns
++        cleaned_columns = original_columns.str.replace(r'^P\(\$\$', '', regex=True) \
++                                          .str.replace(r'_q\)', '', regex=True) \
++                                          .str.replace(r'\$', '', regex=True)
++        data = data.set_axis(cleaned_columns, axis=1)
++        return data
++
++    def check_nullcols(self, df: pd.DataFrame) -> pd.DataFrame:
++        """移除全为空的列"""
++        if df is None or df.empty:
++            return df
++            
++        empty_cols = df.columns[df.isnull().all()].tolist()
++        if empty_cols:
++            logger.info(f"删除全为空的列: {empty_cols}")
++            df = df.drop(columns=empty_cols)
++        return df
++
++    def read_data(self, start_date: str = None, end_date: str = None) -> Dict[str, pd.DataFrame]:
++        """
++        实现 BaseDataReader 接口：获取 Qlib、宏观、外部数据并合并
++        
++        参数:
++            start_date: 开始日期 (YYYYMMDD)
++            end_date: 结束日期 (YYYYMMDD)
++            
++        返回:
++            包含合并后数据的字典，键为 'qlib_data'
++        """
++        logger.info(f"QlibDataReader 开始读取数据，时间范围: {start_date} 至 {end_date}")
++        
++        # 1. 解析映射文件和股票池
++        with open(self.mapping_file, 'r', encoding='utf-8') as f:
++            mapping_results = json.load(f)
++            
++        fin_fields, price_fields, macro_fields, desc_dict = self.json_parse(mapping_results)
++
++        with open(self.stock_pool_file, 'r', encoding='utf-8') as f:
++            instruments = json.load(f)
++
++        merge_data = pd.DataFrame()
++
++        # 2. 读取财务数据
++        if fin_fields:
++            fin_data = self.read_qlibdata(instruments, fin_fields, 'fin', start_date, end_date)
++            fin_data = self.check_nullcols(fin_data)
++            if fin_data is not None and not fin_data.empty:
++                merge_data = fin_data
++
++        # 3. 读取价格数据
++        if price_fields:
++            price_data = self.read_qlibdata(instruments, price_fields, 'price', start_date, end_date)
++            price_data = self.check_nullcols(price_data)
++            if price_data is not None and not price_data.empty:
++                if merge_data.empty:
++                    merge_data = price_data
++                else:
++                    merge_data = pd.merge(price_data, merge_data, on=['datetime', 'instrument'], how='left')
++
++        # 4. 读取并合并宏观数据
++        if macro_fields:
++            logger.info(f"合并宏观数据字段: {macro_fields}")
++            macro_data = pd.read_csv(self.macro_file)
++            macro_data['datetime'] = pd.to_datetime(macro_data['datetime'])
++            
++            current_macro_fields = list(macro_fields)
++            if 'datetime' not in current_macro_fields:
++                current_macro_fields.append('datetime')
++                
++            macro_data = macro_data[current_macro_fields]
++            macro_data = self.preprocess_with_llm(macro_data, desc_dict)
++            
++            if merge_data.empty:
++                merge_data = macro_data
++            else:
++                merge_data = pd.merge(merge_data, macro_data, on='datetime', how='left')
++
++        # 5. 读取并合并外部数据
++        if self.external_data_files:
++            logger.info(f"合并外部已生成指标文件: {self.external_data_files}")
++            for ext_file in self.external_data_files:
++                if Path(ext_file).exists():
++                    ext_df = pd.read_csv(ext_file)
++                    if 'datetime' in ext_df.columns:
++                        ext_df['datetime'] = pd.to_datetime(ext_df['datetime'])
++                        ext_df = self.preprocess_with_llm(ext_df, desc_dict)
++                        
++                        if merge_data.empty:
++                            merge_data = ext_df
++                        else:
++                            on_cols = ['datetime']
++                            if 'instrument' in ext_df.columns and 'instrument' in merge_data.columns:
++                                on_cols.append('instrument')
++                            merge_data = pd.merge(merge_data, ext_df, on=on_cols, how='left')
++                    else:
++                        logger.warning(f"外部文件 {ext_file} 缺少 'datetime' 列，已跳过")
++
++        # 6. 读取并合并行业数据 (inst_stock)
++        if os.path.exists(self.inst_stock_file):
++            logger.info(f"正在读取并合并行业信息文件: {self.inst_stock_file}")
++            try:
++                inst_df = pd.read_csv(self.inst_stock_file)
++                # 根据新格式重命名列：STOCKCODE -> instrument
++                if 'STOCKCODE' in inst_df.columns:
++                    inst_df = inst_df.rename(columns={'STOCKCODE': 'instrument'})
++                elif '股票' in inst_df.columns:
++                    inst_df = inst_df.rename(columns={'股票': 'instrument'})
++                    
++                if '行业' in inst_df.columns and 'NAME' not in inst_df.columns:
++                    inst_df = inst_df.rename(columns={'行业': 'NAME'})
++                
++                # 检查必需列
++                required_cols = {'instrument', 'NAME', 'BEGINDATE', 'ENDDATE'}
++                if required_cols.issubset(inst_df.columns) and not merge_data.empty:
++                    # 将 BEGINDATE 和 ENDDATE 转为数值类型(YYYYMMDD)以便比较
++                    inst_df['BEGINDATE'] = pd.to_numeric(inst_df['BEGINDATE'], errors='coerce').fillna(0)
++                    inst_df['ENDDATE'] = pd.to_numeric(inst_df['ENDDATE'], errors='coerce').fillna(99999999)
++                    
++                    # 准备宽表的 datetime 列用于比较 (YYYYMMDD 格式整数)
++                    merge_data['temp_date_int'] = merge_data['datetime'].dt.strftime('%Y%m%d').astype(int)
++                    
++                    # 由于行业信息是分时间段生效的，使用 pandasql 或者按条件 merge 较为复杂
++                    # 这里我们先做 instrument 维度的 outer/left join，然后按时间条件过滤
++                    inst_subset = inst_df[['instrument', 'NAME', 'BEGINDATE', 'ENDDATE']].copy()
++                    
++                    # 先根据 instrument 合并，这会产生笛卡尔积（一只股票在多个时间段有多个行业记录）
++                    merged_with_inst = pd.merge(merge_data, inst_subset, on='instrument', how='left')
++                    
++                    # 过滤出时间匹配的行：BEGINDATE <= 当前数据日期 <= ENDDATE
++                    # 包含NaN的情况（即该股票没有行业数据），直接保留
++                    mask_valid_industry = (merged_with_inst['temp_date_int'] >= merged_with_inst['BEGINDATE']) & \
++                                          (merged_with_inst['temp_date_int'] <= merged_with_inst['ENDDATE'])
++                    mask_no_industry = merged_with_inst['NAME'].isna()
++                    
++                    merge_data = merged_with_inst[mask_valid_industry | mask_no_industry].copy()
++                    
++                    # 清理临时列
++                    merge_data = merge_data.drop(columns=['temp_date_int', 'BEGINDATE', 'ENDDATE'])
++                    
++                    # 防止因为时间交叠导致重复记录，基于原有的键去重
++                    merge_data = merge_data.drop_duplicates(subset=['datetime', 'instrument'])
++                    
++                elif 'instrument' in inst_df.columns and 'NAME' in inst_df.columns:
++                    # 兼容老格式（没有 BEGINDATE/ENDDATE，直接根据 instrument 合并）
++                    inst_df = inst_df[['instrument', 'NAME']].drop_duplicates()
++                    if not merge_data.empty:
++                        merge_data = pd.merge(merge_data, inst_df, on='instrument', how='left')
++                else:
++                    logger.warning(f"行业信息文件 {self.inst_stock_file} 缺少必要的列。当前列: {inst_df.columns}")
++            except Exception as e:
++                logger.error(f"读取或合并行业信息文件出错: {e}")
++        else:
++            logger.warning(f"未找到行业信息文件 {self.inst_stock_file}，将缺少行业分类列(NAME)。")
++
++        # 7. 数据清洗
++        if not merge_data.empty:
++            # 统一列名以兼容 QuantStockPicker 框架
++            # Qlib 使用 'instrument' 和 'datetime'
++            # QuantStockPicker 使用 'S_INFO_WINDCODE' 和 'TRADE_DT'
++            if 'instrument' in merge_data.columns:
++                merge_data = merge_data.rename(columns={'instrument': 'S_INFO_WINDCODE'})
++            if 'datetime' in merge_data.columns:
++                # 将 datetime 转为 YYYYMMDD 字符串格式，以匹配原框架
++                merge_data['TRADE_DT'] = merge_data['datetime'].dt.strftime('%Y%m%d')
++                
++            # 过滤只取特定日期（如果 end_date 不为 None）
++            if end_date:
++                merge_data = merge_data[merge_data['TRADE_DT'] == end_date]
++
++            value_cols = [col for col in merge_data.columns if col not in ['S_INFO_WINDCODE', 'TRADE_DT', 'datetime']]
++            if value_cols:
++                merge_data = merge_data.dropna(subset=value_cols, how='all')
++                
++            merge_data = merge_data.drop_duplicates()
++            
++        logger.info(f"数据合并完成，数据形状: {merge_data.shape}")
++        
++        # 返回兼容原有框架的字典结构
++        return {
++            'qlib_data': merge_data,
++            # 为了兼容性，可以返回空 DataFrame
++            'listing_data': pd.DataFrame(columns=['S_INFO_WINDCODE', 'LISTING_DATE']), 
++            'industry_classification': pd.DataFrame(columns=['STOCKCODE', 'INDECODE']),
++            'industry_dimension': pd.DataFrame(columns=['CODE', 'NAME'])
++        }
+diff --git a/framework/strategy_config.py b/framework/strategy_config.py
+index 698ee8b..a9334eb 100644
+--- a/framework/strategy_config.py
++++ b/framework/strategy_config.py
+@@ -78,6 +78,15 @@ class StrategyConfigLoader:
+         """
+         return self.config.get('global_params', {})
+ 
++    def get_data_source_config(self) -> Dict:
++        """
++        获取数据源配置 (例如 Qlib 映射文件、股票池等)
++
++        返回：
++            数据源配置字典
++        """
++        return self.config.get('data_source', {})
++
+     def get_filters(self) -> List[Dict]:
+         """
+         获取筛选条件配置
+@@ -160,7 +169,7 @@ class StrategyFactory:
+                 name=name,
+                 column=filter_config['column'],
+                 min_value=filter_config['min_value'],
+-                max_value=filter_config['operator'],
++                max_value=filter_config['max_value'],
+                 include_min=filter_config.get('include_min', True),
+                 include_max=filter_config.get('include_max', True),
+                 description=description
+diff --git a/qlib_premium_value_strategy.py b/qlib_premium_value_strategy.py
+new file mode 100644
+index 0000000..a0274e3
+--- /dev/null
++++ b/qlib_premium_value_strategy.py
+@@ -0,0 +1,230 @@
++import os
++import json
++import pandas as pd
++
++from framework.strategy_framework import (
++    BaseDataProcessor, BaseStockFilter,
++    BaseFeatureCalculator, BaseStrategy
++)
++from framework.qlib_data_reader import QlibDataReader
++from premium_value_strategy_new import PremiumValueStockSelector
++from tools.llm_strategy_generator import LLMStrategyGenerator
++
++class QlibPremiumValueDataProcessor(BaseDataProcessor):
++    """
++    基于 Qlib 数据源的数据处理器
++    """
++    def process_data(self, data_dict, end_date):
++        """
++        数据预处理
++        
++        参数:
++            data_dict: 包含原始数据的字典
++            end_date: 结束日期
++            
++        返回:
++            处理后的数据字典
++        """
++        if 'qlib_data' in data_dict and not data_dict['qlib_data'].empty:
++            df = data_dict['qlib_data']
++            # 基本的清洗逻辑
++            df = df.dropna(how='all', axis=1)  # 删除全为NaN的列
++            data_dict['qlib_data'] = df
++            print(f'去重和删除NaN值后 Qlib 数据形状: {data_dict["qlib_data"].shape}')
++
++        return data_dict
++
++
++class QlibPremiumValueStockFilter(BaseStockFilter):
++    """
++    基于 Qlib 数据源的股票筛选器
++    """
++    def filter_stocks(self, data_dict, date, **kwargs):
++        """
++        初步筛选符合条件的股票
++        
++        参数:
++            data_dict: 包含所有数据的字典
++            date: 当前日期
++            
++        返回:
++            符合条件的股票代码列表
++        """
++        # 由于是基于提前设定好的 stock_pool_file 提取，
++        # 如果有进一步的基于上市时间的筛选需求，可以在这里补充，
++        # 目前直接返回所有获取到的股票。
++        if 'qlib_data' in data_dict and not data_dict['qlib_data'].empty:
++            return data_dict['qlib_data']['S_INFO_WINDCODE'].unique().tolist()
++        return []
++
++
++class QlibPremiumValueFeatureCalculator(BaseFeatureCalculator):
++    """
++    基于 Qlib 数据源的特征计算器
++    """
++    def calculate_features(self, data_dict, stock_list):
++        """
++        计算特征并合并最终宽表
++        
++        参数:
++            data_dict: 包含所有数据的字典
++            stock_list: 股票列表
++            
++        返回:
++            包含特征的DataFrame
++        """
++        if 'qlib_data' not in data_dict or data_dict['qlib_data'].empty:
++            return pd.DataFrame()
++
++        res_df = data_dict['qlib_data']
++        # 仅保留股票列表中的数据
++        res_df = res_df[res_df['S_INFO_WINDCODE'].isin(stock_list)].copy()
++        
++        print(f'最终特征宽表形状: {res_df.shape}')
++        print(f'最终股票数量：{len(res_df["S_INFO_WINDCODE"].unique())}')
++        
++        return res_df
++
++
++class QlibPremiumValueStrategy(BaseStrategy):
++    """
++    使用 Qlib 作为数据源的优质价值策略
++    """
++    def __init__(self, 
++                 mapping_file: str,
++                 stock_pool_file: str,
++                 macro_file: str,
++                 start_date=None, 
++                 end_date=None, 
++                 rebalance_freq='Q', 
++                 rebalance_period=60,
++                 use_config=True,
++                 config_filename=None,
++                 config_dir="config"):
++        """
++        初始化策略
++        """
++        # 实例化基于 Qlib 的 Reader
++        data_reader = QlibDataReader(
++            mapping_file=mapping_file,
++            stock_pool_file=stock_pool_file,
++            macro_file=macro_file
++        )
++        
++        data_processor = QlibPremiumValueDataProcessor()
++        stock_filter = QlibPremiumValueStockFilter()
++        feature_calculator = QlibPremiumValueFeatureCalculator()
++
++        if use_config:
++            if config_filename is None:
++                config_filename = "premium_value_strategy.json"
++
++            config_path = os.path.join(config_dir, config_filename)
++
++            with open(config_path, 'r', encoding='utf-8') as f:
++                config = json.load(f)
++
++            global_params = config.get('global_params', {})
++            start_date = start_date or global_params.get('start_date')
++            end_date = end_date or global_params.get('end_date')
++            rebalance_period = rebalance_period or global_params.get('rebalance_period')
++
++            # 复用原有的 Selector，因为其基于 Pipeline，只依赖 DataFrame 中的列名
++            stock_selector = PremiumValueStockSelector(
++                weight_method='equal',
++                use_config=True,
++                config_path=config_path
++            )
++        else:
++            stock_selector = PremiumValueStockSelector()
++        
++        super().__init__(
++            data_reader=data_reader,
++            data_processor=data_processor,
++            stock_filter=stock_filter,
++            feature_calculator=feature_calculator,
++            stock_selector=stock_selector,
++            start_date=start_date,
++            end_date=end_date,
++            rebalance_freq=rebalance_freq,
++            rebalance_period=rebalance_period,
++        )
++
++
++def main():
++    print("\n===== 使用 Qlib 数据源的优质价值策略 =====")
++    
++    # === 1. 环境与路径准备 ===
++    config_dir = "config"
++    docs_dir = "documents"
++    
++    # 策略相关的配置文件名
++    config_filename = "generated_strategy.json"
++    config_path = os.path.join(config_dir, config_filename)
++    mapping_file = os.path.join(config_dir, "mapping_result.json")
++    
++    # 外部依赖的参考数据文件
++    stock_pool_file = os.path.join(config_dir, "filtered_stock_pool.json")
++    macro_file = os.path.join(docs_dir, "macro_data.csv")
++    
++    # 字段候选文件列表，用于传递给大模型进行映射
++    csv_files = [
++        os.path.join(docs_dir, "财务字段中英文对照表.csv"),
++        os.path.join(docs_dir, "宏观微观字段名对照表.csv"),
++        os.path.join(docs_dir, "量价字段中英文对照表.csv")
++    ]
++    
++    # 为演示环境初始化基础文件（如果在空环境测试）
++    os.makedirs(docs_dir, exist_ok=True)
++    os.makedirs(config_dir, exist_ok=True)
++    if not os.path.exists(macro_file):
++        with open(macro_file, 'w') as f: f.write("datetime,macro_value\n")
++    if not os.path.exists(stock_pool_file):
++        with open(stock_pool_file, 'w') as f: json.dump(["000001.SH"], f)
++        
++    # === 2. 策略配置与字段映射 (LLM 端到端链路) ===
++    
++    # 初始化 LLM 生成器
++    # 这里的模型和 base_url 可根据需要更改，或者依赖环境变量 OPENAI_API_KEY
++    llm_generator = LLMStrategyGenerator()
++    
++    # 如果策略配置文件不存在，则通过一句话自动生成
++    if not os.path.exists(config_path):
++        print("未找到策略配置，正在通过 LLM 生成...")
++        prompt = "我想要一个低市盈率的价值策略，选出行业内市盈率最低的20只股票，调仓周期为30天，测试时间从2021年1月1日到2023年12月31日"
++        strategy_config = llm_generator.generate(prompt, config_path)
++    else:
++        print("发现已存在的策略配置，直接读取。")
++        with open(config_path, 'r', encoding='utf-8') as f:
++            strategy_config = json.load(f)
++            
++    if not strategy_config:
++        print("策略配置生成或读取失败，无法继续。")
++        return
++        
++    # 根据策略配置动态生成/复用 字段映射文件 (mapping_result.json)
++    if not os.path.exists(mapping_file):
++        print("未找到字段映射文件，正在通过 LLM 自动匹配真实数据表...")
++        success = llm_generator.generate_mapping(strategy_config, csv_files, mapping_file)
++        if not success:
++            print("字段映射生成失败。")
++            return
++    else:
++        print("发现已缓存的字段映射 mapping_result.json，直接复用。")
++
++    # === 3. 执行策略回测 ===
++    
++    strategy = QlibPremiumValueStrategy(
++        mapping_file=mapping_file,
++        stock_pool_file=stock_pool_file,
++        macro_file=macro_file,
++        use_config=True,
++        config_filename=config_filename,
++        config_dir=config_dir
++    )
++    
++    rebalance_result = strategy.run()
++    strategy.save_results(rebalance_result, 'qlib_premium_value_strategy_result.csv')
++
++if __name__ == "__main__":
++    main()
+diff --git a/tools/__pycache__/llm_strategy_generator.cpython-314.pyc b/tools/__pycache__/llm_strategy_generator.cpython-314.pyc
+new file mode 100644
+index 0000000..8bdb6e7
+Binary files /dev/null and b/tools/__pycache__/llm_strategy_generator.cpython-314.pyc differ
+diff --git a/tools/llm_strategy_generator.py b/tools/llm_strategy_generator.py
+new file mode 100644
+index 0000000..b3184c7
+--- /dev/null
++++ b/tools/llm_strategy_generator.py
+@@ -0,0 +1,330 @@
++import os
++import sys
++import json
++import csv
++import logging
++from typing import List, Dict, Any, Optional
++from pydantic import BaseModel, Field
++import argparse
++
++from langchain_openai import ChatOpenAI
++from langchain_core.prompts import ChatPromptTemplate
++from langchain_core.output_parsers import JsonOutputParser
++
++# 配置日志
++logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
++logger = logging.getLogger('LLMStrategyGenerator')
++
++# ==========================================
++# 1. 策略配置生成相关模型与 Prompt
++# ==========================================
++
++
++class GlobalParams(BaseModel):
++    top_K: int = Field(default=20, description="最大选股数量")
++    start_date: str = Field(default="20200101", description="回测开始日期 YYYYMMDD")
++    end_date: str = Field(default="20240101", description="回测结束日期 YYYYMMDD")
++    rebalance_period: int = Field(default=20, description="调仓周期(天)")
++    folder_name: str = Field(default="generated_strategy", description="输出文件夹名称")
++
++class FilterConfig(BaseModel):
++    type: str = Field(..., description="过滤器类型: 'simple', 'range', 'rank', 'rank_range'")
++    name: str = Field(..., description="筛选器名称")
++    column: str = Field(..., description="因子字段名（如 S_VAL_PB_NEW, S_FA_CURRENT 等）")
++    operator: Optional[str] = Field(default=None, description="操作符: '>', '>=', '<', '<=', '==' (适用于 simple, rank)")
++    threshold: Optional[float] = Field(default=None, description="阈值 (适用于 simple, rank)")
++    min_value: Optional[float] = Field(default=None, description="最小值 (适用于 range, rank_range)")
++    max_value: Optional[float] = Field(default=None, description="最大值 (适用于 range, rank_range)")
++    rank_type: Optional[str] = Field(default=None, description="当 type 包含 'rank' 时填写，例如 'percentile' 或 'absolute'")
++    scope: Optional[str] = Field(default=None, description="排名范围，例如 'industry' 或 'market'")
++    industry_column: Optional[str] = Field(default=None, description="行业列名，通常为 'NAME'")
++    ascending: Optional[bool] = Field(default=None, description="是否升序排名")
++    description: str = Field(..., description="过滤条件描述")
++
++class RankComponent(BaseModel):
++    name: str = Field(..., description="排序组件名称")
++    column: str = Field(..., description="因子字段名")
++    ascending: bool = Field(default=True, description="是否升序")
++    scope: str = Field(default="industry", description="排名范围，如 'industry' 或 'market'")
++    industry_column: str = Field(default="NAME", description="行业列名")
++    weight: float = Field(default=1.0, description="该因子的权重")
++    description: str = Field(default="", description="描述")
++
++class Ranking(BaseModel):
++    method: str = Field(default="multi_simple", description="排序方法: 'simple' 或 'multi_simple'")
++    name: str = Field(..., description="排序名称")
++    description: str = Field(default="", description="描述")
++    column: Optional[str] = Field(default=None, description="当 method='simple' 时的因子字段名")
++    ascending: Optional[bool] = Field(default=None, description="当 method='simple' 时是否升序")
++    scope: Optional[str] = Field(default=None, description="当 method='simple' 时的排名范围")
++    components: Optional[List[RankComponent]] = Field(default=None, description="当 method='multi_simple' 时的排序组件列表")
++
++class WeightAllocation(BaseModel):
++    type: str = Field(default="equal", description="权重分配类型，如 'equal'")
++    name: str = Field(default="等权重分配", description="名称")
++    description: str = Field(default="为同一调仓日中股票分配相同权重", description="描述")
++
++class StrategyConfigSchema(BaseModel):
++    name: str = Field(..., description="策略名称")
++    description: str = Field(..., description="策略描述")
++    global_params: GlobalParams = Field(..., description="全局参数")
++    filters: List[FilterConfig] = Field(..., description="过滤器列表")
++    ranking: Ranking = Field(..., description="打分排序配置")
++    weight_allocation: WeightAllocation = Field(default_factory=WeightAllocation, description="权重分配配置")
++
++
++LLM_STRATEGY_PROMPT = """
++你是一个量化投资策略专家。请根据用户的自然语言描述，自动生成一个符合指定 JSON 格式的策略配置文件。
++
++用户输入:
++{user_input}
++
++策略配置需要包含以下主要模块：
++1. `name` 和 `description`: 策略的基本信息。
++2. `global_params`: 包含 top_K (最大选股数量), start_date, end_date, rebalance_period, folder_name 等。
++3. `filters`: 筛选条件列表。支持的 type 有 'simple', 'range', 'rank', 'rank_range'。
++   - 'simple': 需要 column, operator (>, >=, <, <=, ==), threshold
++   - 'range': 需要 column, min_value, max_value
++   - 'rank': 需要 column, operator, threshold, rank_type ('percentile' 或 'absolute'), scope ('industry' 或 'market'), ascending (布尔值)
++   - 'rank_range': 需要 column, min_value, max_value, rank_type, scope, ascending
++   - 注意：如果涉及行业内比较，scope 设置为 'industry'，industry_column 设置为 'NAME'。
++4. `ranking`: 最终打分排序规则。支持 method 为 'simple'（单因子）或 'multi_simple'（多因子加权）。
++5. `weight_allocation`: 权重分配，通常为 type="equal"。
++
++请确保输出严格符合要求的 JSON 结构。你可以根据用户的描述合理推断因子字段名（如 PE 对应 S_VAL_PE_TTM，PB 对应 S_VAL_PB_NEW，流动比率对应 S_FA_CURRENT，等）。如果不确定具体的列名，可使用常见Wind/Qlib因子名称。
++
++{format_instructions}
++"""
++
++# ==========================================
++# 2. 字段映射相关模型与 Prompt
++# ==========================================
++
++class RelatedField(BaseModel):
++    table_name: str = Field(..., description="数据库表名")
++    field_name: str = Field(..., description="真实字段名")
++    description: str = Field(..., description="字段中文名或注释说明")
++
++class FieldMapping(BaseModel):
++    strategy_field: str = Field(..., description="策略配置中使用的字段名")
++    related_fields: List[RelatedField] = Field(..., description="从候选集合中匹配到的真实表和字段")
++
++class MappingResultSchema(BaseModel):
++    mappings: List[FieldMapping] = Field(..., description="所有字段的映射结果")
++
++LLM_MAPPING_PROMPT = """
++你是一个金融数据专家。我有一组量化策略中需要使用的字段名称（可能包含英文缩写或中文描述），以及一份包含许多真实数据库表和字段的候选对照表。
++请根据策略所需的字段，从候选对照表中挑选出最匹配的真实字段（可能不止一个，但一般一个对应一个核心业务字段）。
++
++需要映射的策略字段集合:
++{target_fields}
++
++候选的真实字段集合（格式为: table_name, field_name, 中文注释）:
++{candidate_fields}
++
++请输出严格的 JSON 格式，结构如下：
++{{
++  "mappings": [
++    {{
++      "strategy_field": "策略里的名字",
++      "related_fields": [
++        {{
++          "table_name": "匹配到的表名",
++          "field_name": "匹配到的真实字段名",
++          "description": "对应的中文说明"
++        }}
++      ]
++    }}
++  ]
++}}
++
++{format_instructions}
++"""
++
++class LLMStrategyGenerator:
++    """使用大模型自动生成策略配置的工具类"""
++    
++    def __init__(self, 
++                 model="gpt-4o", 
++                 base_url=None, 
++                 api_key=None, 
++                 temperature=0.2):
++        
++        # 从环境变量获取 API 配置，或者使用传入的值
++        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
++        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
++        
++        if not self.api_key:
++            logger.error("未找到 OPENAI_API_KEY，请设置环境变量或通过参数传入")
++            sys.exit(1)
++            
++        # 初始化 LLM
++        self.llm = ChatOpenAI(
++            model=model,
++            base_url=self.base_url,
++            api_key=self.api_key,
++            temperature=temperature
++        )
++        
++    def generate(self, user_input: str, output_file: str) -> bool:
++        """
++        根据用户输入生成配置文件
++        
++        参数:
++            user_input: 策略的自然语言描述
++            output_file: 保存生成的 JSON 文件的路径
++        """
++        logger.info(f"正在分析用户描述并生成策略配置...")
++        
++        parser = JsonOutputParser(pydantic_object=StrategyConfigSchema)
++        prompt = ChatPromptTemplate.from_template(
++            template=LLM_STRATEGY_PROMPT,
++            partial_variables={"format_instructions": parser.get_format_instructions()}
++        )
++        
++        chain = prompt | self.llm | parser
++        
++        try:
++            strategy_config = chain.invoke({"user_input": user_input})
++            
++            # 排除掉 None 值
++            cleaned_config = strategy_config.copy()
++            for filter_item in cleaned_config.get("filters", []):
++                for k in list(filter_item.keys()):
++                    if filter_item[k] is None:
++                        del filter_item[k]
++                        
++            ranking = cleaned_config.get("ranking", {})
++            for k in list(ranking.keys()):
++                if ranking[k] is None:
++                    del ranking[k]
++            
++            # 将生成的配置保存为 JSON 文件
++            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
++            
++            with open(output_file, 'w', encoding='utf-8') as f:
++                json.dump(cleaned_config, f, ensure_ascii=False, indent=2)
++                
++            logger.info(f"策略配置已成功生成并保存到: {output_file}")
++            return cleaned_config
++            
++        except Exception as e:
++            logger.error(f"生成策略配置失败: {e}")
++            return None
++
++    def read_csv_fields(self, file_paths: List[str]) -> List[str]:
++        """
++        读取 CSV 字段文件，生成候选字段集合字符串
++        """
++        all_fields = []
++        for file_path in file_paths:
++            if not os.path.exists(file_path):
++                logger.warning(f"候选字段对照表不存在，跳过: {file_path}")
++                continue
++                
++            try:
++                with open(file_path, 'r', encoding='utf-8') as f:
++                    reader = csv.DictReader(f)
++                    for row in reader:
++                        desc = row.get('中文名') or row.get('注释') or ''
++                        field_info = f"{row.get('table_name', '')},{row.get('field_name', '')}, {desc}"
++                        all_fields.append(field_info)
++            except Exception as e:
++                logger.error(f"读取 {file_path} 时出错: {e}")
++        return all_fields
++
++    def extract_required_fields(self, strategy_config: Dict) -> List[str]:
++        """
++        从生成的策略配置中提取所有需要的字段
++        """
++        required_fields = set()
++        
++        # 1. 提取 Filters 中的列
++        for f in strategy_config.get('filters', []):
++            if 'column' in f: required_fields.add(f['column'])
++            
++        # 2. 提取 Ranking 中的列
++        ranking = strategy_config.get('ranking', {})
++        if 'column' in ranking:
++            required_fields.add(ranking['column'])
++            
++        for comp in ranking.get('components', []):
++            if 'column' in comp: required_fields.add(comp['column'])
++            
++        # 3. 基础必加字段 (供 QlibDataReader 或主框架使用)
++        required_fields.add('close') # 用于价格处理
++        
++        excluded_fields = {'NAME'}
++        required_fields = {f for f in required_fields if f not in excluded_fields}
++        
++        return list(required_fields)
++
++    def generate_mapping(self, strategy_config: Dict, csv_files: List[str], mapping_output_file: str) -> bool:
++        """
++        根据策略配置和本地的 CSV 字段表，利用 LLM 生成字段映射 mapping_result.json
++        """
++        if os.path.exists(mapping_output_file):
++            logger.info(f"映射文件 {mapping_output_file} 已存在，跳过生成步骤。如果需要重新生成请先删除。")
++            return True
++            
++        required_fields = self.extract_required_fields(strategy_config)
++        logger.info(f"需要映射的策略字段: {required_fields}")
++        
++        candidate_fields = self.read_csv_fields(csv_files)
++        if not candidate_fields:
++            logger.error("候选字段为空，无法执行字段映射，请检查 CSV 文件路径是否正确。")
++            return False
++            
++        candidate_str = "\n".join(candidate_fields)
++        
++        logger.info("正在调用 LLM 进行字段映射...")
++        parser = JsonOutputParser(pydantic_object=MappingResultSchema)
++        prompt = ChatPromptTemplate.from_template(
++            template=LLM_MAPPING_PROMPT,
++            partial_variables={"format_instructions": parser.get_format_instructions()}
++        )
++        
++        chain = prompt | self.llm | parser
++        
++        try:
++            mapping_result = chain.invoke({
++                "target_fields": ", ".join(required_fields),
++                "candidate_fields": candidate_str
++            })
++            
++            os.makedirs(os.path.dirname(os.path.abspath(mapping_output_file)), exist_ok=True)
++            with open(mapping_output_file, 'w', encoding='utf-8') as f:
++                json.dump(mapping_result, f, ensure_ascii=False, indent=2)
++                
++            logger.info(f"字段映射已成功生成并保存到: {mapping_output_file}")
++            return True
++            
++        except Exception as e:
++            logger.error(f"生成字段映射失败: {e}")
++            return False
++
++if __name__ == "__main__":
++    parser = argparse.ArgumentParser(description="LLM 量化策略配置生成器")
++    parser.add_argument("--prompt", type=str, required=True, help="策略的自然语言描述")
++    parser.add_argument("--output", type=str, default="config/generated_strategy.json", help="输出的 JSON 配置文件路径")
++    parser.add_argument("--model", type=str, default="gpt-4o", help="使用的模型名称")
++    parser.add_argument("--base-url", type=str, default=None, help="LLM API Base URL")
++    
++    args = parser.parse_args()
++    
++    generator = LLMStrategyGenerator(model=args.model, base_url=args.base_url)
++    
++    # 1. 生成策略配置
++    strategy_config = generator.generate(args.prompt, args.output)
++    
++    if strategy_config:
++        # 2. 如果存在本地 CSV 对照表，则自动进行字段映射
++        csv_files = [
++            "documents/财务字段中英文对照表.csv",
++            "documents/宏观微观字段名对照表.csv",
++            "documents/量价字段中英文对照表.csv"
++        ]
++        
++        # 将输出文件同级目录作为 mapping 文件的保存路径
++        mapping_file = os.path.join(os.path.dirname(args.output), "mapping_result.json")
++        generator.generate_mapping(strategy_config, csv_files, mapping_file)

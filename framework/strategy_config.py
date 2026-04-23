@@ -78,6 +78,15 @@ class StrategyConfigLoader:
         """
         return self.config.get('global_params', {})
 
+    def get_data_source_config(self) -> Dict:
+        """
+        获取数据源配置 (例如 Qlib 映射文件、股票池等)
+
+        返回：
+            数据源配置字典
+        """
+        return self.config.get('data_source', {})
+
     def get_filters(self) -> List[Dict]:
         """
         获取筛选条件配置
@@ -160,7 +169,7 @@ class StrategyFactory:
                 name=name,
                 column=filter_config['column'],
                 min_value=filter_config['min_value'],
-                max_value=filter_config['operator'],
+                max_value=filter_config['max_value'],
                 include_min=filter_config.get('include_min', True),
                 include_max=filter_config.get('include_max', True),
                 description=description

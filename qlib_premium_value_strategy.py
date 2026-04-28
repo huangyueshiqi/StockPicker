@@ -15,7 +15,7 @@ from framework.qlib_data_reader import QlibDataReader
 from framework.llm_strategy_generator import LLMStrategyGenerator
 from framework.stock_selector import PremiumValueStockSelector
 from framework.llm_cache_manager import make_cache_id,read_latest,write_latest,write_meta
-from fund.extract_rules import extract_rules_from_top_features, LLMRuleAnalyzer
+from fund.extract_rules import extract_rules_from_top_features
 
 
 class QlibPremiumValueDataProcessor(BaseDataProcessor):
@@ -226,11 +226,18 @@ def main(args):
     prompt = args.prompt
     fund_df_path = getattr(args, 'fund_df_path', '')
     fund_features_file = getattr(args, 'fund_features_file', '')
+    fund_start_date = None
+    fund_end_date = None
 
     if fund_df_path and os.path.exists(fund_df_path) and fund_features_file and os.path.exists(fund_features_file):
         print(f"\n===== 检测到 fund 数据，开始从决策树提取选股规则作为 Prompt =====")
         try:
             df_fund = pd.read_csv(fund_df_path)
+            if 'datetime' in df_fund.columns:
+                dt = pd.to_datetime(df_fund['datetime'], errors='coerce')
+                if not dt.isna().all():
+                    fund_start_date = dt.min().strftime('%Y%m%d')
+                    fund_end_date = dt.max().strftime('%Y%m%d')
             # 使用最大深度为 5 提取决策树路径
             pandas_rules = extract_rules_from_top_features(df_fund, top_features_file=fund_features_file, target_col='label', max_depth=5)
             
@@ -314,7 +321,7 @@ def main(args):
     need_generate_config=has_prompt_input or not os.path.exists(config_path)
     if need_generate_config:
         print(f"正在通过 LLM 生成策略配置...cache_id={cache_id}")
-        strategy_config = generator.generate(prompt, config_path)
+        strategy_config = generator.generate(prompt, config_path, start_date=fund_start_date, end_date=fund_end_date)
         write_latest(cache_root,cache_id)
         write_meta(cache_dir,{"cache_id":cache_id,"prompt":prompt,"created_at":time.time()})
     else:

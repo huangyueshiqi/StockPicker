@@ -88,6 +88,10 @@ LLM_STRATEGY_PROMPT = """
 用户输入（可能是自然语言描述，也可能是如 Pandas 形式的筛选规则如 `(df['S_VAL_PB'] < 1.0, 'S_VAL_PB':'市净率')`）:
 {user_input}
 
+已知回测信息（如不为空，请务必写入到 global_params 对应字段中；如为空再自行推断）：
+- start_date: {start_date}
+- end_date: {end_date}
+
 策略配置需要包含以下主要模块：
 1. `name` 和 `description`: 策略的基本信息。请根据用户输入或规则自行推断合理的策略名称与描述。
 2. `global_params`: 包含 top_K (最大选股数量), start_date, end_date, rebalance_period, folder_name 等。 
@@ -185,13 +189,15 @@ class LLMStrategyGenerator:
             temperature=temperature
         )
 
-    def generate(self, user_input: str, output_file: str) -> bool:
+    def generate(self, user_input: str, output_file: str, start_date: str = None, end_date: str = None) -> bool:
         """
         根据用户输入生成配置文件
 
         参数:
             user_input: 策略的自然语言描述
             output_file: 保存生成的 JSON 文件的路径
+            start_date: 回测开始日期 YYYYMMDD（可选）
+            end_date: 回测结束日期 YYYYMMDD（可选）
         """
         logger.info(f"正在分析用户描述并生成策略配置...")
 
@@ -204,7 +210,7 @@ class LLMStrategyGenerator:
         chain = prompt | self.llm | parser
 
         try:
-            strategy_config = chain.invoke({"user_input": user_input})
+            strategy_config = chain.invoke({"user_input": user_input, "start_date": start_date, "end_date": end_date})
 
             # 排除掉 None 值
             cleaned_config = strategy_config.copy()

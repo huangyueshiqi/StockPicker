@@ -83,22 +83,25 @@ class StrategyConfigSchema(BaseModel):
 
 
 LLM_STRATEGY_PROMPT = """
-你是一个量化投资策略专家。请根据用户的自然语言描述，自动生成一个符合指定 JSON 格式的策略配置文件。
+你是一个量化投资策略专家。请根据用户的自然语言描述，或者提供的一段带有字段注释的选股规则（机器代码形式），自动生成一个符合指定 JSON 格式的策略配置文件。
 
-用户输入:
+用户输入（可能是自然语言描述，也可能是如 Pandas 形式的筛选规则如 `(df['S_VAL_PB'] < 1.0, 'S_VAL_PB':'市净率')`）:
 {user_input}
 
 策略配置需要包含以下主要模块：
-1. `name` 和 `description`: 策略的基本信息。
-2. `global_params`: 包含 top_K (最大选股数量), start_date, end_date, rebalance_period, folder_name 等。 -- 额外要求：请给出 lookback_years（数据回看窗口，单位年）。
-如果策略包含“X年复合增长率/过去X年均值/长期波动率”等需要历史窗口的指标，lookback_years 至少覆盖该窗口；否则可使用默认 1 年。
+1. `name` 和 `description`: 策略的基本信息。请根据用户输入或规则自行推断合理的策略名称与描述。
+2. `global_params`: 包含 top_K (最大选股数量), start_date, end_date, rebalance_period, folder_name 等。 
+   - 额外要求：请给出 lookback_years（数据回看窗口，单位年）。
+   - 如果策略包含“X年复合增长率/过去X年均值/长期波动率”等需要历史窗口的指标，lookback_years 至少覆盖该窗口；否则可使用默认 1 年。
+   - 若用户输入为机器规则而未提供日期/周期/选股数量信息，请自行推断或使用默认假设：如 20210101-20251231，周期 60 天，选前 20 只。
 3. `filters`: 筛选条件列表。支持的 type 有 'simple', 'range', 'rank', 'rank_range'。
    - 'simple': 需要 column, operator (>, >=, <, <=, ==), threshold
    - 'range': 需要 column, min_value, max_value
    - 'rank': 需要 column, operator, threshold, rank_type ('percentile' 或 'absolute'), scope ('industry' 或 'market'), ascending (布尔值)
    - 'rank_range': 需要 column, min_value, max_value, rank_type, scope, ascending
    - 注意：如果涉及行业内比较，scope 设置为 'industry'，industry_column 设置为 'NAME'。
-4. `ranking`: 最终打分排序规则。支持 method 为 'simple'（单因子）或 'multi_simple'（多因子加权）。
+   - 特别注意：如果用户输入的是带有数字阈值的机器代码，请务必将其转换为对应的 `filters` 条件！例如 `df['pvt_ashareenergyindexadj'] <= 2878390.2500` 应该对应一个 type='simple', operator='<=', threshold=2878390.25 的过滤器，以此类推。
+4. `ranking`: 最终打分排序规则。支持 method 为 'simple'（单因子）或 'multi_simple'（多因子加权）。若规则中没有明显排序倾向，可默认用规则中涉及的核心价值/动量指标做排序，或者提供一个合理的默认排序（如行业内PB）。
 5. `weight_allocation`: 权重分配，通常为 type="equal"。
 
 请确保输出严格符合要求的 JSON 结构。你可以根据用户的描述合理推断因子字段名（如 PE 对应 S_VAL_PE_TTM，PB 对应 S_VAL_PB_NEW，流动比率对应 S_FA_CURRENT，等）。如果不确定具体的列名，可使用常见Wind/Qlib因子名称。

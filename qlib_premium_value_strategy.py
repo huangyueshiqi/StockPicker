@@ -238,24 +238,10 @@ def main(args):
                 # 如果存在多条高潜规则，优先选择第一条进行策略生成
                 extracted_rule = pandas_rules[0]
                 
-                # 初始化规则分析器把规则转换成自然语言 Prompt
+                # 直接将机器提取出来的 if-else 规则当作 prompt 传给主流程生成器
                 print(f"提取到的决策树规则: {extracted_rule}")
-                print(f"正在使用 LLMRuleAnalyzer 翻译为自然语言描述...")
-                
-                analyzer = LLMRuleAnalyzer(model="deepseek-v3", base_url="http://172.21.16.9/ms-r6rcvnnp/v1", api_key="app-kKH20nKvnhRhRzoAZSMWhFVJ", temperature=0.4)
-                start_date = df_fund['datetime'].min() if 'datetime' in df_fund.columns else "20210101"
-                end_date = df_fund['datetime'].max() if 'datetime' in df_fund.columns else "20251231"
-                
-                # 保存到一个临时文件并读取 one_liner 作为 prompt
-                temp_analysis_file = os.path.join("config", "temp_rule_analysis.json")
-                analysis_res = analyzer.analyze(user_input=extracted_rule, start_date=start_date, end_date=end_date, output_file=temp_analysis_file)
-                
-                if analysis_res and "one_liner" in analysis_res:
-                    prompt = analysis_res["one_liner"]
-                    print(f"成功将基金规则翻译为策略 Prompt: {prompt}")
-                else:
-                    prompt = f"回测区间：{start_date}到{end_date}。筛选条件：{extracted_rule}。请根据这些条件生成策略配置。"
-                    print(f"规则分析未返回一句话描述，使用原始规则构造 Prompt: {prompt}")
+                prompt = extracted_rule
+                print(f"将直接使用机器提取规则作为策略 Prompt: {prompt}")
             else:
                 print("未能从基金数据中提取到高潜规则，将回退到默认 prompt 逻辑。")
         except Exception as e:

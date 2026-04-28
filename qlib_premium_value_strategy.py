@@ -15,6 +15,7 @@ from framework.qlib_data_reader import QlibDataReader
 from framework.llm_strategy_generator import LLMStrategyGenerator
 from framework.stock_selector import PremiumValueStockSelector
 from framework.llm_cache_manager import make_cache_id,read_latest,write_latest,write_meta
+from fund.extract_rules import extract_rules_from_top_features, LLMRuleAnalyzer
 
 
 class QlibPremiumValueDataProcessor(BaseDataProcessor):
@@ -173,6 +174,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='LLM 策略量化交易回测系统端到端流水线')
     parser.add_argument('--prompt', type=str, default='', help='自然语言策略描述')
     parser.add_argument('--interactive', action='store_true',default=True, help='如果没有提供prompt，是否进入交互模式输入')
+    parser.add_argument('--fund_df_path', type=str, default='', help='如果提供，将从该基金数据的决策树中提取规则并作为 prompt (需指向 df_value 等特征csv)')
+    parser.add_argument('--fund_features_file', type=str, default='', help='基金数据对应的SHAP特征文件 (例如 selected_features_80pct.csv)')
     parser.add_argument('--cache_id', type=str,default='', help='使用指定cache_id(时间戳)目录下的策略配置与映射文件')
     parser.add_argument('--mode', type=str, default='llm', help='回测模式，固定为llm')
     parser.add_argument('--trade_file', type=str, default='qlib_premium_value_strategy_result.csv',
@@ -220,8 +223,44 @@ def build_run_llm_command(args, python_executable: str = None, script_dir: str =
 def main(args):
     print("\n===== 使用 Qlib 数据源的优质价值策略 =====")
 
-    # 确定 prompt
     prompt = args.prompt
+    fund_df_path = getattr(args, 'fund_df_path', '')
+    fund_features_file = getattr(args, 'fund_features_file', '')
+
+    if fund_df_path and os.path.exists(fund_df_path) and fund_features_file and os.path.exists(fund_features_file):
+        print(f"\n===== 检测到 fund 数据，开始从决策树提取选股规则作为 Prompt =====")
+        try:
+            df_fund = pd.read_csv(fund_df_path)
+            # 使用最大深度为 5 提取决策树路径
+            pandas_rules = extract_rules_from_top_features(df_fund, top_features_file=fund_features_file, target_col='label', max_depth=5)
+            
+            if pandas_rules and len(pandas_rules) > 0:
+                # 如果存在多条高潜规则，优先选择第一条进行策略生成
+                extracted_rule = pandas_rules[0]
+                
+                # 初始化规则分析器把规则转换成自然语言 Prompt
+                print(f"提取到的决策树规则: {extracted_rule}")
+                print(f"正在使用 LLMRuleAnalyzer 翻译为自然语言描述...")
+                
+                analyzer = LLMRuleAnalyzer(model="deepseek-v3", base_url="http://172.21.16.9/ms-r6rcvnnp/v1", api_key="app-kKH20nKvnhRhRzoAZSMWhFVJ", temperature=0.4)
+                start_date = df_fund['datetime'].min() if 'datetime' in df_fund.columns else "20210101"
+                end_date = df_fund['datetime'].max() if 'datetime' in df_fund.columns else "20251231"
+                
+                # 保存到一个临时文件并读取 one_liner 作为 prompt
+                temp_analysis_file = os.path.join("config", "temp_rule_analysis.json")
+                analysis_res = analyzer.analyze(user_input=extracted_rule, start_date=start_date, end_date=end_date, output_file=temp_analysis_file)
+                
+                if analysis_res and "one_liner" in analysis_res:
+                    prompt = analysis_res["one_liner"]
+                    print(f"成功将基金规则翻译为策略 Prompt: {prompt}")
+                else:
+                    prompt = f"回测区间：{start_date}到{end_date}。筛选条件：{extracted_rule}。请根据这些条件生成策略配置。"
+                    print(f"规则分析未返回一句话描述，使用原始规则构造 Prompt: {prompt}")
+            else:
+                print("未能从基金数据中提取到高潜规则，将回退到默认 prompt 逻辑。")
+        except Exception as e:
+            print(f"提取基金规则失败: {e}，将回退到默认 prompt 逻辑。")
+
     if not prompt:
         if args.interactive:
             prompt = input("请输入你的选股策略描述 (例如: 回测区间：2021-01-01到2025-12-31。寻找低市盈率(PE_TTM)且高ROE的股票，每60个交易日调仓，等权持仓，选前20只): ")

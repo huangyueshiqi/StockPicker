@@ -239,7 +239,7 @@ class BaseStrategy(abc.ABC):
             开始日期
         """
         from dateutil.relativedelta import relativedelta
-        return end_dt - relativedelta(years=5)
+        return end_dt - relativedelta(months=1)
     
     def _generate_rebalance_table(self, rebalance_dates: List[str], stock_lists: List[List[str]]) -> pd.DataFrame:
         """
@@ -253,13 +253,16 @@ class BaseStrategy(abc.ABC):
             调仓表DataFrame
         """
         data = []
-        for date, stocks in zip(rebalance_dates, stock_lists):
+                
+        for date,stocks in zip(rebalance_dates,stock_lists):
             for stock in stocks:
                 data.append({
-                    'date': date,
-                    'stock': stock
+                    'datetime': date,
+                    'instrument': stock,
                 })
-        return pd.DataFrame(data)
+        data=pd.DataFrame(data)
+        data['datetime'] = pd.to_datetime(data['datetime'],format="%Y%m%d")
+        return data
     
     def save_results(self, rebalance_table: pd.DataFrame, filename: str = None) -> None:
         """

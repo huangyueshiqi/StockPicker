@@ -68,7 +68,7 @@ class FactorLoader:
 
         # 未找到配置目录，使用当前目录
         logger.warning("未找到配置目录，将使用当前目录")
-        return Path(".")
+        return Path("..")
 
     def load_factor_config(self, factor_csv: Optional[str] = None) -> pd.DataFrame:
         """

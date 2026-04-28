@@ -7,11 +7,10 @@ from framework.strategy_framework import (
     BaseFeatureCalculator, BaseStockSelector, BaseStrategy
 )
 from utils.helpers import (
-    execute_query, WIND_DB, JYLH_DB, FINCHINA_DB,
-    filter_and_clean_dataframe, get_stock_listing_data,
+    execute_query, JYLH_DB, filter_and_clean_dataframe, get_stock_listing_data,
     filter_stocks_by_listing_age
 )
-from framework.factor_loader import FactorLoader
+from framework.old.factor_loader import FactorLoader
 
 # 示例：重构Premium_value_strategy.py为使用新框架的实现
 
@@ -164,7 +163,7 @@ class PremiumValueStockSelector(BaseStockSelector):
         if self.use_config:
             if self.config_path is None:
                 #默认使用内置的优质价值策略配置
-                self.config_path=os.path.join('config','premium_value_strategy.json')
+                self.config_path=os.path.join('../../config', 'premium_value_strategy.json')
 
             from framework.configurable_strategy import ConfigurableStockSelector
             self.configurable_selector=ConfigurableStockSelector(config_path=self.config_path)

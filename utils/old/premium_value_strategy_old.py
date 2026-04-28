@@ -322,7 +322,7 @@ class PremiumValueStockSelector(BaseStockSelector):
         if self.use_config:
             if self.config_path is None:
                 #默认使用内置的优质价值策略配置
-                self.config_path=os.path.join('utils','premium_value_strategy.json')
+                self.config_path=os.path.join('', 'premium_value_strategy.json')
 
             from framework.configurable_strategy import ConfigurableStockSelector
             self.configurable_selector=ConfigurableStockSelector(config_path=self.config_path)
@@ -384,7 +384,7 @@ class PremiumValueStrategy(BaseStrategy):
         #如果使用配置文件
         if use_config:
             if config_path is None:
-                config_path = os.path.join('utils', 'premium_value_strategy.json')
+                config_path = os.path.join('', 'premium_value_strategy.json')
 
             # 从配置文件读取参数
             with open(config_path, 'r', encoding='utf-8') as f:

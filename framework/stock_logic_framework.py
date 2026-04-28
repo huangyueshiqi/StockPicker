@@ -2,8 +2,6 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable
 
-import setuptools.command.install
-
 
 class FilterCondition:
     """
@@ -413,9 +411,12 @@ class MultiSimpleRankMethod(RankMethod):
         rank_columns = []
         for method in self.rank_methods:
             if method.scope == "market":
-                rank_columns.append(f"{method.column}_rank")
+                rank_col=f"{method.column}_rank"
             else:
-                rank_columns.append(f"{method.column}_industry_rank")
+                rank_col=f"{method.column}_industry_rank"
+
+            if rank_col in result.columns:
+                rank_columns.append(rank_col)
 
         if not rank_columns:
             return result
@@ -828,6 +829,7 @@ class StockFilterPipeline:
         
         # 获取股票列表和权重列表
         stock_list = list(result[stock_column])
+        print(f"最终股票数量：{len(stock_list)}")
 
         weight_list = list(result['weight'])
         

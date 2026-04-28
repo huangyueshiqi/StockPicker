@@ -185,11 +185,14 @@ def analyze_leaf_nodes(tree_clf, feature_names, X, y):
 
             pandas_rule = " & ".join(conditions)
 
+            # 记录用于排序比较的信息
             high_prob_rules.append({
                 'node_id': leaf_id,
                 'buy_prob': buy_prob,
                 'samples': samples,
-                'rule_code': pandas_rule
+                'rule_code': pandas_rule,
+                # 用 F1 score 的思想，结合高概率与覆盖率作为一个综合评分
+                'score': (2 * buy_prob * (samples/len(X))) / (buy_prob + (samples/len(X)))
             })
 
             print(f"⭐ 发现高潜选股节点 (节点ID: {leaf_id}):")
@@ -197,7 +200,14 @@ def analyze_leaf_nodes(tree_clf, feature_names, X, y):
             print(f"   - 预测买入胜率 (加权): {buy_prob * 100:.1f}%")
             print(f"   - 实际命中正样本数: {int(value[1])}")
             print(f"   - 【回测提取代码】:\n     selected_stocks = df[{pandas_rule}]\n")
-            pandas_rules.append(pandas_rule)
+
+    # 如果有规则，挑选最优的一条（综合评分最高）
+    if high_prob_rules:
+        best_rule = max(high_prob_rules, key=lambda x: x['score'])
+        print(f"\n🏆 选取的最优规则 (节点ID: {best_rule['node_id']}, 胜率: {best_rule['buy_prob']*100:.1f}%, 样本数: {best_rule['samples']}):")
+        print(f"   {best_rule['rule_code']}")
+        pandas_rules.append(best_rule['rule_code'])
+
     return pandas_rules
 
 

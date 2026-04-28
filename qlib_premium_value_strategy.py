@@ -235,11 +235,11 @@ def main(args):
             pandas_rules = extract_rules_from_top_features(df_fund, top_features_file=fund_features_file, target_col='label', max_depth=5)
             
             if pandas_rules and len(pandas_rules) > 0:
-                # 如果存在多条高潜规则，优先选择第一条进行策略生成
+                # pandas_rules 现在只返回了一条最优规则
                 extracted_rule = pandas_rules[0]
                 
                 # 直接将机器提取出来的 if-else 规则当作 prompt 传给主流程生成器
-                print(f"提取到的决策树规则: {extracted_rule}")
+                print(f"提取到的最优决策树规则: {extracted_rule}")
                 prompt = extracted_rule
                 print(f"将直接使用机器提取规则作为策略 Prompt: {prompt}")
             else:

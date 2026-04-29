@@ -12,6 +12,15 @@ def parse_clusters_arg(v: str) -> Optional[List[int]]:
         return None
     return [int(x.strip()) for x in v.split(",") if x.strip() != ""]
 
+def select_feature_columns(df_columns: List[str], selected_features: List[str], base_cols: List[str]) -> List[str]:
+    base_set = set(base_cols)
+    out = list(base_cols)
+    for f in selected_features:
+        if f in df_columns and f not in base_set:
+            out.append(f)
+            base_set.add(f)
+    return out
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="批量生成各 cluster 的 df_value 与 SHAP 特征选择文件")
@@ -101,6 +110,14 @@ def run_one_cluster(cluster_id: int, fund_codes: List[str], holdings: pd.DataFra
         shap_coverage=args.shap_coverage,
         output_dir=out_dir,
     )
+
+    selected_features_df = pd.read_csv(selected_path)
+    if "feature" in selected_features_df.columns:
+        selected_features = selected_features_df["feature"].dropna().astype(str).tolist()
+        base_cols = ["fund", "instrument", "datetime", "label"]
+        keep_cols = select_feature_columns(df_value.columns.tolist(), selected_features, base_cols)
+        df_selected = df_value[keep_cols].copy()
+        df_selected.to_csv(os.path.join(out_dir, "df_value_selected_features.csv"), index=False)
 
     dt = pd.to_datetime(sub["F_PRT_ENDDATE"], errors="coerce")
     start_date = dt.min()

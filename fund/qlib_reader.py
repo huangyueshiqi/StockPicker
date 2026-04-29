@@ -11,6 +11,8 @@ from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy.sparse import hstack, csr_matrix
 from sklearn.preprocessing import normalize
+from dataclasses import dataclass
+from typing import Tuple, Optional
 
 # 定义支持的表名
 fin_tables = [
@@ -37,6 +39,13 @@ price_tables_lower = {name.lower() for name in price_tables}
 # 数据路径配置
 price_data_path = "/home/quant/zc/finance_deal/qlib_data/price_data0821"
 fin_data_path = "/home/quant/zc/finance_deal/qlib_data/pit_data"
+
+@dataclass
+class QlibReaderParams:
+    docs_dir: str = "documents"
+    price_data_path: str = price_data_path
+    fin_data_path: str = fin_data_path
+    field_csv_files: Tuple[str, str] = ("财务字段中英文对照表.csv", "量价字段中英文对照表.csv")
 
 
 def clean_fund_name(name):
@@ -160,12 +169,12 @@ def build_qlib_fields(all_fields):
 
 
 def read_qlibdata(instruments: list, fields: list, data_type: str, start_time: str,
-                  end_time: str) -> pd.DataFrame:
+                  end_time: str, price_uri: Optional[str] = None, fin_uri: Optional[str] = None) -> pd.DataFrame:
     """
     从QLib读取数据
     """
     if data_type == 'price':
-        qlib.init(provider_uri=price_data_path, skip_if_exists=True)
+        qlib.init(provider_uri=price_uri or price_data_path, skip_if_exists=True)
         # 在指定时间范围内获取数据
         data = D.features(
             instruments=instruments,
@@ -176,7 +185,7 @@ def read_qlibdata(instruments: list, fields: list, data_type: str, start_time: s
         )
         data = data.reset_index()
     elif data_type == 'fin':
-        qlib.init(provider_uri=fin_data_path, skip_if_exists=True)
+        qlib.init(provider_uri=fin_uri or fin_data_path, skip_if_exists=True)
         data = D.features(
             instruments=instruments,
             fields=fields,
@@ -198,15 +207,14 @@ def read_qlibdata(instruments: list, fields: list, data_type: str, start_time: s
     return data
 
 
-def get_all_csv_data(instruments: list, start_time: str, end_time: str):
+def get_all_csv_data(instruments: list, start_time: str, end_time: str, params: Optional[QlibReaderParams] = None):
     """
     主函数：读取所有CSV字段并获取对应的QLib数据
     """
-    docs_dir = "/home/quant/zc/backtrader/QuantStockPicker/documents"
-    csv_files = [
-        os.path.join(docs_dir, "财务字段中英文对照表.csv"),
-        os.path.join(docs_dir, "量价字段中英文对照表.csv")
-    ]
+    if params is None:
+        params = QlibReaderParams()
+    docs_dir = params.docs_dir
+    csv_files = [os.path.join(docs_dir, f) for f in params.field_csv_files]
 
     # 1. 读取CSV字段定义
     print("正在读取CSV字段文件...")
@@ -232,7 +240,7 @@ def get_all_csv_data(instruments: list, start_time: str, end_time: str):
     if fin_fields:
         print("正在获取财务数据...")
         try:
-            fin_data = read_qlibdata(instruments, fin_fields, 'fin', start_time, end_time)
+            fin_data = read_qlibdata(instruments, fin_fields, 'fin', start_time, end_time, price_uri=params.price_data_path, fin_uri=params.fin_data_path)
             print(f"财务数据形状: {fin_data.shape if fin_data is not None else 'None'}")
         except Exception as e:
             print(f"获取财务数据失败: {e}")
@@ -240,7 +248,7 @@ def get_all_csv_data(instruments: list, start_time: str, end_time: str):
     if price_fields:
         print("正在获取量价数据...")
         try:
-            price_data = read_qlibdata(instruments, price_fields, 'price', start_time, end_time)
+            price_data = read_qlibdata(instruments, price_fields, 'price', start_time, end_time, price_uri=params.price_data_path, fin_uri=params.fin_data_path)
             print(f"量价数据形状: {price_data.shape if price_data is not None else 'None'}")
         except Exception as e:
             print(f"获取量价数据失败: {e}")
@@ -248,7 +256,7 @@ def get_all_csv_data(instruments: list, start_time: str, end_time: str):
     return fin_data, price_data
 
 
-def build_df_for_xgb(fund_holding4, factor_data, neg_ratio=1, random_state=42):
+def build_df_for_xgb(fund_holding4, factor_data, neg_ratio=1, random_state=42, nan_threshold: float = 0.6):
     rng = np.random.default_rng(random_state)
 
 
@@ -291,10 +299,35 @@ def build_df_for_xgb(fund_holding4, factor_data, neg_ratio=1, random_state=42):
     )
 
     exclude_cols = ['fund', 'instrument', 'datetime', 'label']
-    df, _ = drop_high_nan_columns(df, threshold=0.6, exclude_cols=exclude_cols)
+    df, _ = drop_high_nan_columns(df, threshold=nan_threshold, exclude_cols=exclude_cols)
 
     feature_cols = [c for c in df.columns if c not in set(exclude_cols)]
     return df, feature_cols
+
+def build_factor_data(fund_holding4: pd.DataFrame, params: Optional[QlibReaderParams] = None) -> pd.DataFrame:
+    if params is None:
+        params = QlibReaderParams()
+    start_date = fund_holding4['F_PRT_ENDDATE'].min()
+    end_date = fund_holding4['F_PRT_ENDDATE'].max()
+    instruments = fund_holding4['S_INFO_STOCKWINDCODE'].dropna().unique().tolist()
+    target_dates = pd.to_datetime(pd.Series(fund_holding4['F_PRT_ENDDATE'].dropna().unique()))
+    financial_data, price_data = get_all_csv_data(instruments, start_date, end_date, params=params)
+    if financial_data is None or price_data is None:
+        return pd.DataFrame()
+    financial_data['datetime'] = pd.to_datetime(financial_data['datetime'])
+    price_data['datetime'] = pd.to_datetime(price_data['datetime'])
+    price_data = price_data[price_data['datetime'].isin(target_dates)]
+    fin_data = financial_data.sort_values(by='datetime').reset_index(drop=True)
+    price_data = price_data.sort_values(by='datetime').reset_index(drop=True)
+    factor_data = pd.merge_asof(
+        left=price_data,
+        right=fin_data,
+        on='datetime',
+        by='instrument',
+        direction='backward'
+    )
+    factor_data = factor_data.sort_values(by='datetime').reset_index(drop=True)
+    return factor_data
 
 
 
@@ -365,4 +398,3 @@ if __name__ == "__main__":
     df.to_csv("df_value.csv", index=False)
     print(f"\n5. 生成用于训练的 df 完成，形状: {df.shape}，特征列数: {len(feature_cols)}")
     print(df['datetime'].unique())
-

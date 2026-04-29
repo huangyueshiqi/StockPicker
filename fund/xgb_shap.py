@@ -3,6 +3,7 @@ import numpy as np
 import xgboost as xgb
 import shap
 import matplotlib.pyplot as plt
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score,recall_score,accuracy_score
 import warnings
@@ -22,7 +23,7 @@ def select_features_by_shap_coverage(importance_df, coverage=0.8):
     selected = importance_df.iloc[: cut_idx + 1].copy()
     return selected, importance_df
 
-def train_and_explain(df, feature_cols, target_col='label', train_full=False, shap_coverage=0.8):
+def train_and_explain(df, feature_cols, target_col='label', train_full=False, shap_coverage=0.8, output_dir: str = "."):
     """
     训练 XGBoost 模型，并使用 SHAP 进行特征归因分析
     """
@@ -104,12 +105,13 @@ def train_and_explain(df, feature_cols, target_col='label', train_full=False, sh
     print(importance_df.head(10))
 
     # 5. 保存特征重要性到 CSV
-    output_csv = "feature_shap_importance.csv"
+    os.makedirs(output_dir, exist_ok=True)
+    output_csv = os.path.join(output_dir, "feature_shap_importance.csv")
     importance_df.to_csv(output_csv, index=False)
     print(f"\n特征重要性已保存至: {output_csv}")
 
     selected_df, importance_with_ratio = select_features_by_shap_coverage(importance_df, coverage=shap_coverage)
-    selected_path = "selected_features_80pct.csv"
+    selected_path = os.path.join(output_dir, "selected_features_80pct.csv")
     selected_df.to_csv(selected_path, index=False)
     print(f"累计重要性覆盖 {int(shap_coverage * 100)}% 的特征已保存至: {selected_path} (共 {len(selected_df)} 列)")
 
@@ -119,9 +121,9 @@ def train_and_explain(df, feature_cols, target_col='label', train_full=False, sh
     # plot_type="dot" 是标准的蜜蜂图，显示正负影响
     shap.summary_plot(shap_values, X_shap, max_display=20, show=False)
     plt.tight_layout()
-    plt.savefig("shap_summary_plot.png", dpi=300)
+    plt.savefig(os.path.join(output_dir, "shap_summary_plot.png"), dpi=300)
     plt.close()
-    print("SHAP摘要图已保存至: shap_summary_plot.png")
+    print(f"SHAP摘要图已保存至: {os.path.join(output_dir, 'shap_summary_plot.png')}")
 
 
 if __name__ == "__main__":
@@ -137,7 +139,6 @@ if __name__ == "__main__":
 
     # 2. 训练并进行 SHAP 归因
     train_and_explain(df, feature_cols, target_col='label',train_full=True, shap_coverage=0.8)
-
 
 
 

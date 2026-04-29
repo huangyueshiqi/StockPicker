@@ -78,7 +78,7 @@ def get_lineage(tree, feature_names):
     return paths
 
 def extract_rules_from_top_features(df, top_features_file='selected_features_80pct.csv', target_col='label',
-                                    max_depth=3):
+                                    max_depth=3, desc_df_path: str = None, plot_path: str = None):
     """
     使用单棵浅层决策树，从选出的核心特征中提取人类可读的 If-Else 选股规则。
     参数:
@@ -116,27 +116,31 @@ def extract_rules_from_top_features(df, top_features_file='selected_features_80p
     print(tree_rules)
     # 5. 寻找高胜率的“买入规则” (叶子节点分析)
     print("\n--- 高胜率买入路径分析 ---")
-    pandas_rules=analyze_leaf_nodes(tree_clf, valid_features, X, y)
+    pandas_rules=analyze_leaf_nodes(tree_clf, valid_features, X, y, desc_df_path=desc_df_path)
 
     # 6. 可视化并保存决策树结构图
-    print("\n4. 正在生成决策树可视化图 (decision_tree_rules.png)...")
-    plt.figure(figsize=(20, 10))
-    plot_tree(
-        tree_clf,
-        feature_names=valid_features,
-        class_names=['Not Buy (0)', 'Buy (1)'],
-        filled=True,
-        rounded=True,
-        proportion=True,
-        fontsize=10
-    )
-    plt.savefig('decision_tree_rules.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    print("   保存成功！可以通过查看该图片直观地了解各个阈值划分。")
+    if plot_path:
+        print(f"\n4. 正在生成决策树可视化图 ({plot_path})...")
+        plt.figure(figsize=(20, 10))
+        plot_tree(
+            tree_clf,
+            feature_names=valid_features,
+            class_names=['Not Buy (0)', 'Buy (1)'],
+            filled=True,
+            rounded=True,
+            proportion=True,
+            fontsize=10
+        )
+        out_dir = os.path.dirname(os.path.abspath(plot_path))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print("   保存成功！可以通过查看该图片直观地了解各个阈值划分。")
     return pandas_rules
 
 
-def analyze_leaf_nodes(tree_clf, feature_names, X, y):
+def analyze_leaf_nodes(tree_clf, feature_names, X, y, desc_df_path: str = None):
     """
     分析决策树的叶子节点，找出预测为正类(买入)且纯度较高(胜率高)的规则路径，
     并直接输出可用于 Pandas/回测 的 Python 代码。
@@ -148,7 +152,23 @@ def analyze_leaf_nodes(tree_clf, feature_names, X, y):
 
     high_prob_rules = []
     pandas_rules=[]
-    desc_df=pd.read_csv("/home/quant/zc/backtrader/QuantStockPicker/documents/财务量价字段表.csv")
+    resolved_desc_path = None
+    if desc_df_path and os.path.exists(desc_df_path):
+        resolved_desc_path = desc_df_path
+    else:
+        candidates = [
+            os.path.join("documents", "财务量价字段表.csv"),
+            "财务量价字段表.csv",
+        ]
+        for p in candidates:
+            if os.path.exists(p):
+                resolved_desc_path = p
+                break
+
+    if resolved_desc_path:
+        desc_df = pd.read_csv(resolved_desc_path)
+    else:
+        desc_df = pd.DataFrame(columns=["field_name", "table_name", "注释"])
 
     # 遍历所有叶子节点
     for leaf_id, path in paths.items():

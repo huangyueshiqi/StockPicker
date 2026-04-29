@@ -8,12 +8,9 @@ from typing import Dict, List, Optional
 
 
 def parse_clusters_arg(v: str) -> Optional[List[int]]:
-    s = v.strip()
-    if s.lower() == "all":
+    if v.strip().lower() == "all":
         return None
-    if s.startswith("[") and s.endswith("]"):
-        s = s[1:-1].strip()
-    return [int(x.strip()) for x in s.split(",") if x.strip() != ""]
+    return [int(x.strip()) for x in v.split(",") if x.strip() != ""]
 
 
 def parse_args():

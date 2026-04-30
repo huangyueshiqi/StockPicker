@@ -10,6 +10,8 @@ except Exception:
 import sys
 import subprocess
 
+from backtest_subprocess import build_run_llm_command
+
 from framework.strategy_framework import (
     BaseDataProcessor, BaseStockFilter,
     BaseFeatureCalculator, BaseStrategy
@@ -197,35 +199,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_run_llm_command(args, python_executable: str = None, script_dir: str = None):
-    if python_executable is None:
-        python_executable = sys.executable
-
-    if script_dir is None:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    run_llm_path = os.path.join(script_dir, "run_llm.py")
-    cmd = [
-        python_executable,
-        run_llm_path,
-        "--mode", args.mode,
-        "--trade_file", args.trade_file,
-        "--plot_output", args.plot_output,
-        "--project_root", args.project_root,
-    ]
-
-    if getattr(args, "output", ""):
-        cmd.extend(["--output", args.output])
-
-    if getattr(args, "plot_trades", False):
-        cmd.append("--plot_trades")
-
-    if getattr(args, "verbose", False):
-        cmd.append("--verbose")
-
-    return cmd
-
-
 def main(args):
     print("\n===== 使用 Qlib 数据源的优质价值策略 =====")
 
@@ -337,15 +310,10 @@ def main(args):
 
     # === 4. 执行回测 ===
     print("\n===== 开始调用回测框架 =====")
-    import run_llm
-    run_llm.run_backtest(
-        trade_file=args.trade_file,
-        plot_output=args.plot_output,
-        plot_trades=args.plot_trades,
-        verbose=args.verbose,
-        project_root=args.project_root,
-        output=args.output,
-    )
+    cmd = build_run_llm_command(args)
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise RuntimeError(f"回测脚本执行失败，退出码: {result.returncode}")
 
 
 if __name__ == "__main__":

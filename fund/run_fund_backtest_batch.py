@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import traceback
+import shutil
 from typing import Any, Dict, List, Optional
 
 
@@ -53,6 +54,13 @@ def load_cluster_inputs(batch_outdir: str, cluster_id: int) -> Dict[str, str]:
 
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
+
+def copy_if_exists(src: str, dst: str) -> bool:
+    if not src or not os.path.exists(src):
+        return False
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    shutil.copyfile(src, dst)
+    return True
 
 def build_qlib_strategy_command(
     python: str,
@@ -134,10 +142,16 @@ def run_one_fund(
         returncode = 1
         error = str(e)
         tb = traceback.format_exc()
+
+    cache_config_path = os.path.join("config", "llm_cache", cache_id, "generated_strategy.json")
+    cache_mapping_path = os.path.join("config", "llm_cache", cache_id, "mapping_result.json")
+    copy_if_exists(cache_config_path, os.path.join(fund_dir, "generated_strategy.json"))
+    copy_if_exists(cache_mapping_path, os.path.join(fund_dir, "mapping_result.json"))
     meta = {
         "cluster_id": int(cluster_id),
         "fund_code": str(fund_code),
         "cache_id": cache_id,
+        "cmd": None,
         "cmd": None,
         "returncode": returncode,
         "error": error,

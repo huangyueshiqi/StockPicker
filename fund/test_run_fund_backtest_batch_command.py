@@ -8,20 +8,17 @@ class TestCommandBuild(unittest.TestCase):
         cmd = build_qlib_strategy_command(
             python="python",
             script="/workspace/qlib_premium_value_strategy.py",
-            df_value_path="/tmp/df.csv",
-            features_path="/tmp/feat.csv",
-            fund_rule="RULE",
+            fund_rule_file="/tmp/rule.txt",
             trade_file="/tmp/trade.csv",
             plot_output="/tmp/plot.png",
             backtest_log="/tmp/backtest.log",
             cache_id="cid",
             project_root="/tmp/backtrader_test",
         )
-        self.assertIn("--fund_rule", cmd)
-        i = cmd.index("--fund_rule")
-        self.assertEqual(cmd[i + 1], "RULE")
+        self.assertIn("--fund_rule_file", cmd)
+        i = cmd.index("--fund_rule_file")
+        self.assertEqual(cmd[i + 1], "/tmp/rule.txt")
 
 
 if __name__ == "__main__":
     unittest.main()
-

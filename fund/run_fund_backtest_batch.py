@@ -59,8 +59,6 @@ def build_qlib_strategy_command(
     script: str,
     fund_rule_file: str,
     trade_file: str,
-    plot_output: str,
-    backtest_log: str,
     cache_id: str,
     project_root: str,
 ) -> List[str]:
@@ -71,15 +69,12 @@ def build_qlib_strategy_command(
         fund_rule_file,
         "--trade_file",
         trade_file,
-        "--plot_output",
-        plot_output,
-        "--output",
-        backtest_log,
         "--cache_id",
         cache_id,
         "--project_root",
         project_root,
         "--interactive",
+        "--skip_backtest",
     ]
     return cmd
 
@@ -98,11 +93,9 @@ def run_one_fund(
     df_value_path = os.path.join(fund_dir, "df_value.csv")
     rule_path = os.path.join(fund_dir, "rule.txt")
     trade_path = os.path.join(fund_dir, "trade.csv")
-    plot_path = os.path.join(fund_dir, "plot.png")
-    backtest_log = os.path.join(fund_dir, "backtest.log")
     meta_path = os.path.join(fund_dir, "run_meta.json")
 
-    if args.resume and os.path.exists(trade_path) and os.path.exists(backtest_log):
+    if args.resume and os.path.exists(trade_path):
         return {"cluster_id": cluster_id, "fund_code": fund_code, "skipped": True, "fund_dir": fund_dir}
 
     df_fund.to_csv(df_value_path, index=False)
@@ -128,8 +121,6 @@ def run_one_fund(
             script="/workspace/qlib_premium_value_strategy.py",
             fund_rule_file=rule_path,
             trade_file=trade_path,
-            plot_output=plot_path,
-            backtest_log=backtest_log,
             cache_id=cache_id,
             project_root=args.project_root,
         )

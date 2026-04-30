@@ -196,6 +196,7 @@ def parse_args():
     parser.add_argument('--verbose', action='store_true', help='是否输出详细信息')
     parser.add_argument('--project_root', type=str, default='/home/quant/zc/backtrader/QuantBacktester_57',
                         help='QuantBacktester项目的根目录路径')
+    parser.add_argument('--skip_backtest', action='store_true', default=False, help='仅生成调仓表，不执行回测')
     return parser.parse_args()
 
 
@@ -310,6 +311,9 @@ def main(args):
 
     # === 4. 执行回测 ===
     print("\n===== 开始调用回测框架 =====")
+    if getattr(args, "skip_backtest", False):
+        print("已设置 skip_backtest，仅生成调仓表，跳过回测。")
+        return
     cmd = build_run_llm_command(args)
     result = subprocess.run(cmd)
     if result.returncode != 0:

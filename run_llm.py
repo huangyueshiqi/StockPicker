@@ -27,6 +27,14 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+def _purge_conflicting_modules(current_project_root: str) -> None:
+    root = os.path.abspath(current_project_root)
+    for name, mod in list(sys.modules.items()):
+        if name == "utils" or name.startswith("utils."):
+            mod_file = getattr(mod, "__file__", "") or ""
+            if mod_file and os.path.abspath(mod_file).startswith(root):
+                sys.modules.pop(name, None)
+
 
 def run_backtest(
     trade_file: str,
@@ -43,8 +51,11 @@ def run_backtest(
     import pandas as pd
 
     project_root_abs = os.path.abspath(project_root)
-    if project_root_abs not in sys.path:
-        sys.path.insert(0, project_root_abs)
+    current_project_root = os.path.dirname(os.path.abspath(__file__))
+    _purge_conflicting_modules(current_project_root)
+    if project_root_abs in sys.path:
+        sys.path.remove(project_root_abs)
+    sys.path.insert(0, project_root_abs)
 
     from main import BacktestManager
     from utils.config import config

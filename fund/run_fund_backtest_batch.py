@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -93,39 +92,47 @@ def run_one_fund(
         f.write(rule)
 
     cache_id = f"cluster{cluster_id}_{fund_code}_{time.strftime('%Y%m%d_%H%M%S')}"
-    cmd = [
-        args.python,
-        "/workspace/qlib_premium_value_strategy.py",
-        "--fund_df_path",
-        df_value_path,
-        "--fund_features_file",
-        feat_path,
-        "--trade_file",
-        trade_path,
-        "--plot_output",
-        plot_path,
-        "--output",
-        backtest_log,
-        "--cache_id",
-        cache_id,
-        "--project_root",
-        args.project_root,
-    ]
+    import argparse as _argparse
+    import qlib_premium_value_strategy as _q
 
-    p = subprocess.run(cmd)
+    run_args = _argparse.Namespace(
+        prompt="",
+        interactive=False,
+        fund_df_path=df_value_path,
+        fund_features_file=feat_path,
+        cache_id=cache_id,
+        mode="llm",
+        trade_file=trade_path,
+        output=backtest_log,
+        plot_output=plot_path,
+        plot_trades=False,
+        verbose=False,
+        project_root=args.project_root,
+    )
+    try:
+        _q.main(run_args)
+        returncode = 0
+        error = None
+        tb = None
+    except Exception as e:
+        returncode = 1
+        error = str(e)
+        tb = traceback.format_exc()
     meta = {
         "cluster_id": int(cluster_id),
         "fund_code": str(fund_code),
         "cache_id": cache_id,
-        "cmd": cmd,
-        "returncode": int(p.returncode),
+        "cmd": None,
+        "returncode": returncode,
+        "error": error,
+        "traceback": tb,
         "df_rows": int(getattr(df_fund, "shape", [0])[0]),
     }
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    if p.returncode != 0:
-        failure = {"cluster_id": int(cluster_id), "fund_code": str(fund_code), "returncode": int(p.returncode)}
+    if returncode != 0:
+        failure = {"cluster_id": int(cluster_id), "fund_code": str(fund_code), "returncode": returncode, "error": error}
         with open(failures_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(failure, ensure_ascii=False) + "\n")
         return {"cluster_id": cluster_id, "fund_code": fund_code, "skipped": False, "failed": True, "fund_dir": fund_dir}
@@ -198,4 +205,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

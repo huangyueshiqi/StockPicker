@@ -360,10 +360,15 @@ def main(args):
 
     # === 4. 执行回测 ===
     print("\n===== 开始调用回测框架 =====")
-    cmd = build_run_llm_command(args)
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        print(f"回测脚本执行失败，退出码: {result.returncode}")
+    import run_llm
+    run_llm.run_backtest(
+        trade_file=args.trade_file,
+        plot_output=args.plot_output,
+        plot_trades=args.plot_trades,
+        verbose=args.verbose,
+        project_root=args.project_root,
+        output=args.output,
+    )
 
 
 if __name__ == "__main__":

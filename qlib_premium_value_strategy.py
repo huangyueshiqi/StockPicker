@@ -3,7 +3,10 @@ import json
 import argparse
 import time
 
-import pandas as pd
+try:
+    import pandas as pd
+except Exception:
+    pd = None
 import sys
 import subprocess
 
@@ -16,6 +19,7 @@ from framework.llm_strategy_generator import LLMStrategyGenerator
 from framework.stock_selector import PremiumValueStockSelector
 from framework.llm_cache_manager import make_cache_id,read_latest,write_latest,write_meta
 from fund.extract_rules import extract_rules_from_top_features
+from fund.fund_prompt import get_fund_prompt_and_dates
 
 
 class QlibPremiumValueDataProcessor(BaseDataProcessor):
@@ -176,6 +180,8 @@ def parse_args():
     parser.add_argument('--interactive', action='store_true',default=True, help='如果没有提供prompt，是否进入交互模式输入')
     parser.add_argument('--fund_df_path', type=str, default='', help='如果提供，将从该基金数据的决策树中提取规则并作为 prompt (需指向 df_value 等特征csv)')
     parser.add_argument('--fund_features_file', type=str, default='', help='基金数据对应的SHAP特征文件 (例如 selected_features_80pct.csv)')
+    parser.add_argument('--fund_rule', type=str, default='', help='如果提供，将直接使用该规则作为 prompt，跳过规则提取')
+    parser.add_argument('--fund_rule_file', type=str, default='', help='如果提供，将读取文件内容作为 fund_rule')
     parser.add_argument('--cache_id', type=str,default='', help='使用指定cache_id(时间戳)目录下的策略配置与映射文件')
     parser.add_argument('--mode', type=str, default='llm', help='回测模式，固定为llm')
     parser.add_argument('--trade_file', type=str, default='qlib_premium_value_strategy_result.csv',
@@ -223,36 +229,7 @@ def build_run_llm_command(args, python_executable: str = None, script_dir: str =
 def main(args):
     print("\n===== 使用 Qlib 数据源的优质价值策略 =====")
 
-    prompt = args.prompt
-    fund_df_path = getattr(args, 'fund_df_path', '')
-    fund_features_file = getattr(args, 'fund_features_file', '')
-    fund_start_date = None
-    fund_end_date = None
-
-    if fund_df_path and os.path.exists(fund_df_path) and fund_features_file and os.path.exists(fund_features_file):
-        print(f"\n===== 检测到 fund 数据，开始从决策树提取选股规则作为 Prompt =====")
-        try:
-            df_fund = pd.read_csv(fund_df_path)
-            if 'datetime' in df_fund.columns:
-                dt = pd.to_datetime(df_fund['datetime'], errors='coerce')
-                if not dt.isna().all():
-                    fund_start_date = dt.min().strftime('%Y%m%d')
-                    fund_end_date = dt.max().strftime('%Y%m%d')
-            # 使用最大深度为 5 提取决策树路径
-            pandas_rules = extract_rules_from_top_features(df_fund, top_features_file=fund_features_file, target_col='label', max_depth=5)
-            
-            if pandas_rules and len(pandas_rules) > 0:
-                # pandas_rules 现在只返回了一条最优规则
-                extracted_rule = pandas_rules[0]
-                
-                # 直接将机器提取出来的 if-else 规则当作 prompt 传给主流程生成器
-                print(f"提取到的最优决策树规则: {extracted_rule}")
-                prompt = extracted_rule
-                print(f"将直接使用机器提取规则作为策略 Prompt: {prompt}")
-            else:
-                print("未能从基金数据中提取到高潜规则，将回退到默认 prompt 逻辑。")
-        except Exception as e:
-            print(f"提取基金规则失败: {e}，将回退到默认 prompt 逻辑。")
+    prompt, fund_start_date, fund_end_date = get_fund_prompt_and_dates(args, extract_rules_func=extract_rules_from_top_features)
 
     if not prompt:
         if args.interactive:

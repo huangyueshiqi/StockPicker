@@ -100,6 +100,8 @@ def run_one_fund(
         interactive=False,
         fund_df_path=df_value_path,
         fund_features_file=feat_path,
+        fund_rule=rule,
+        fund_rule_file="",
         cache_id=cache_id,
         mode="llm",
         trade_file=trade_path,

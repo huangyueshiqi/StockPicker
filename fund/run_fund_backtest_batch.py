@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -53,6 +54,41 @@ def load_cluster_inputs(batch_outdir: str, cluster_id: int) -> Dict[str, str]:
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
+def build_qlib_strategy_command(
+    python: str,
+    script: str,
+    df_value_path: str,
+    features_path: str,
+    fund_rule: str,
+    trade_file: str,
+    plot_output: str,
+    backtest_log: str,
+    cache_id: str,
+    project_root: str,
+) -> List[str]:
+    cmd = [
+        python,
+        script,
+        "--fund_df_path",
+        df_value_path,
+        "--fund_features_file",
+        features_path,
+        "--fund_rule",
+        fund_rule,
+        "--trade_file",
+        trade_file,
+        "--plot_output",
+        plot_output,
+        "--output",
+        backtest_log,
+        "--cache_id",
+        cache_id,
+        "--project_root",
+        project_root,
+        "--interactive",
+    ]
+    return cmd
+
 
 def run_one_fund(
     cluster_id: int,
@@ -92,28 +128,23 @@ def run_one_fund(
         f.write(rule)
 
     cache_id = f"cluster{cluster_id}_{fund_code}_{time.strftime('%Y%m%d_%H%M%S')}"
-    import argparse as _argparse
-    import qlib_premium_value_strategy as _q
-
-    run_args = _argparse.Namespace(
-        prompt="",
-        interactive=False,
-        fund_df_path=df_value_path,
-        fund_features_file=feat_path,
-        fund_rule=rule,
-        fund_rule_file="",
-        cache_id=cache_id,
-        mode="llm",
-        trade_file=trade_path,
-        output=backtest_log,
-        plot_output=plot_path,
-        plot_trades=False,
-        verbose=False,
-        project_root=args.project_root,
-    )
     try:
-        _q.main(run_args)
-        returncode = 0
+        cmd = build_qlib_strategy_command(
+            python=args.python,
+            script="/workspace/qlib_premium_value_strategy.py",
+            df_value_path=df_value_path,
+            features_path=feat_path,
+            fund_rule=rule,
+            trade_file=trade_path,
+            plot_output=plot_path,
+            backtest_log=backtest_log,
+            cache_id=cache_id,
+            project_root=args.project_root,
+        )
+        strategy_log = os.path.join(fund_dir, "strategy.log")
+        with open(strategy_log, "w", encoding="utf-8") as f:
+            p = subprocess.run(cmd, stdout=f, stderr=f)
+        returncode = int(p.returncode)
         error = None
         tb = None
     except Exception as e:

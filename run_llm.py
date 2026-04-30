@@ -9,7 +9,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='LLM 策略量化交易回测系统')
     # 添加参数
     parser.add_argument('--mode', type=str, default='llm', help='回测模式，固定为llm')
-    parser.add_argument('--trade_file', type=str, default='qlib_premium_value_strategy_result.csv', help='调仓表文件路径(必须提供)')
+    parser.add_argument('--trade_file', type=str, required=True, help='调仓表文件路径(必须提供)')
     parser.add_argument('--output', type=str, default='', help='输出结果文件路径')
     parser.add_argument('--plot_output', type=str, default='plot/llm_strategy_plot.png',
                         help='策略回测资产变化图保存路径')
@@ -27,15 +27,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-def _purge_conflicting_modules(current_project_root: str) -> None:
-    root = os.path.abspath(current_project_root)
-    for name, mod in list(sys.modules.items()):
-        if name == "utils" or name.startswith("utils."):
-            mod_file = getattr(mod, "__file__", "") or ""
-            if mod_file and os.path.abspath(mod_file).startswith(root):
-                sys.modules.pop(name, None)
-
-
 def run_backtest(
     trade_file: str,
     plot_output: str,
@@ -51,11 +42,8 @@ def run_backtest(
     import pandas as pd
 
     project_root_abs = os.path.abspath(project_root)
-    current_project_root = os.path.dirname(os.path.abspath(__file__))
-    _purge_conflicting_modules(current_project_root)
-    if project_root_abs in sys.path:
-        sys.path.remove(project_root_abs)
-    sys.path.insert(0, project_root_abs)
+    if project_root_abs not in sys.path:
+        sys.path.insert(0, project_root_abs)
 
     from main import BacktestManager
     from utils.config import config

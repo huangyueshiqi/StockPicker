@@ -63,6 +63,7 @@ def build_run_llm_cmd(python: str, script_dir: str, trade_file: str, plot_output
 
 def main():
     args = parse_args()
+    args.root = os.path.abspath(args.root)
     failures_path = os.path.join(args.root, "backtest_failures.jsonl")
     summary_path = os.path.join(args.root, "backtest_summary.json")
 
@@ -113,4 +114,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -42,8 +42,9 @@ def run_backtest(
     import pandas as pd
 
     project_root_abs = os.path.abspath(project_root)
-    if project_root_abs not in sys.path:
-        sys.path.insert(0, project_root_abs)
+    if project_root_abs in sys.path:
+        sys.path.remove(project_root_abs)
+    sys.path.insert(0, project_root_abs)
 
     from main import BacktestManager
     from utils.config import config

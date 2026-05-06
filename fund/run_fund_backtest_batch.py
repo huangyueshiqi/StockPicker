@@ -54,6 +54,13 @@ def load_cluster_inputs(batch_outdir: str, cluster_id: int) -> Dict[str, str]:
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
+def should_skip_fund(pos_count: int, rule: str, min_pos: int) -> Optional[str]:
+    if pos_count < int(min_pos):
+        return "too_few_pos"
+    if not str(rule or "").strip():
+        return "empty_rule"
+    return None
+
 def build_qlib_strategy_command(
     python: str,
     script: str,
@@ -102,6 +109,29 @@ def run_one_fund(
 
     from fund.extract_rules import extract_rules_from_top_features
 
+    pos_count = 0
+    try:
+        if "label" in df_fund.columns:
+            pos_count = int((df_fund["label"] == 1).sum())
+    except Exception:
+        pos_count = 0
+
+    if pos_count < 5:
+        meta = {
+            "cluster_id": int(cluster_id),
+            "fund_code": str(fund_code),
+            "cache_id": None,
+            "cmd": None,
+            "returncode": 0,
+            "skipped": True,
+            "skip_reason": "too_few_pos",
+            "pos_count": pos_count,
+            "df_rows": int(getattr(df_fund, "shape", [0])[0]),
+        }
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return {"cluster_id": cluster_id, "fund_code": fund_code, "skipped": True, "skip_reason": "too_few_pos", "fund_dir": fund_dir}
+
     rules = extract_rules_from_top_features(
         df_fund,
         top_features_file=feat_path,
@@ -113,6 +143,23 @@ def run_one_fund(
     rule = rules[0] if rules else ""
     with open(rule_path, "w", encoding="utf-8") as f:
         f.write(rule)
+
+    skip_reason = should_skip_fund(pos_count=pos_count, rule=rule, min_pos=5)
+    if skip_reason:
+        meta = {
+            "cluster_id": int(cluster_id),
+            "fund_code": str(fund_code),
+            "cache_id": None,
+            "cmd": None,
+            "returncode": 0,
+            "skipped": True,
+            "skip_reason": skip_reason,
+            "pos_count": pos_count,
+            "df_rows": int(getattr(df_fund, "shape", [0])[0]),
+        }
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return {"cluster_id": cluster_id, "fund_code": fund_code, "skipped": True, "skip_reason": skip_reason, "fund_dir": fund_dir}
 
     cache_id = f"cluster{cluster_id}_{fund_code}_{time.strftime('%Y%m%d_%H%M%S')}"
     try:

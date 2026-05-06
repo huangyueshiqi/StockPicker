@@ -54,6 +54,9 @@ def load_cluster_inputs(batch_outdir: str, cluster_id: int) -> Dict[str, str]:
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
+def should_skip_fund_rule(rule: str) -> bool:
+    return not bool((rule or "").strip())
+
 def build_qlib_strategy_command(
     python: str,
     script: str,
@@ -113,6 +116,21 @@ def run_one_fund(
     rule = rules[0] if rules else ""
     with open(rule_path, "w", encoding="utf-8") as f:
         f.write(rule)
+
+    if should_skip_fund_rule(rule):
+        meta = {
+            "cluster_id": int(cluster_id),
+            "fund_code": str(fund_code),
+            "cache_id": None,
+            "cmd": None,
+            "returncode": 0,
+            "error": "no_rule_extracted",
+            "traceback": None,
+            "df_rows": int(getattr(df_fund, "shape", [0])[0]),
+        }
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        return {"cluster_id": cluster_id, "fund_code": fund_code, "skipped": True, "fund_dir": fund_dir, "reason": "no_rule_extracted"}
 
     cache_id = f"cluster{cluster_id}_{fund_code}_{time.strftime('%Y%m%d_%H%M%S')}"
     try:

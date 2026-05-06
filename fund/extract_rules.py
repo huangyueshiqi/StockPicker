@@ -170,6 +170,9 @@ def analyze_leaf_nodes(tree_clf, feature_names, X, y, desc_df_path: str = None):
     else:
         desc_df = pd.DataFrame(columns=["field_name", "table_name", "注释"])
 
+    leaf_ids = tree_clf.apply(X)
+    y_arr = np.asarray(y)
+
     # 遍历所有叶子节点
     for leaf_id, path in paths.items():
         # 获取该叶子节点的样本分布 [负样本权重和, 正样本权重和]
@@ -178,9 +181,13 @@ def analyze_leaf_nodes(tree_clf, feature_names, X, y, desc_df_path: str = None):
         buy_prob = value[1] / (value[0] + value[1])
         # 样本数量
         samples = tree_.n_node_samples[leaf_id]
+        mask = leaf_ids == leaf_id
+        pos_count = int((y_arr[mask] == 1).sum())
+        neg_count = int((y_arr[mask] == 0).sum())
+        buy_prob_raw = pos_count / (pos_count + neg_count) if (pos_count + neg_count) > 0 else 0.0
 
         # 定义高潜规则：买入概率 > 60% 且 覆盖样本数 > 总样本的 5%
-        if buy_prob > 0.6 and samples > len(X) * 0.05:
+        if buy_prob > 0.6 and samples > len(X) * 0.05 and pos_count > 0:
             # 拼接 Pandas 的查询条件
             if not path:
                 continue
@@ -209,16 +216,19 @@ def analyze_leaf_nodes(tree_clf, feature_names, X, y, desc_df_path: str = None):
             high_prob_rules.append({
                 'node_id': leaf_id,
                 'buy_prob': buy_prob,
+                'buy_prob_raw': buy_prob_raw,
                 'samples': samples,
+                'pos_count': pos_count,
+                'neg_count': neg_count,
                 'rule_code': pandas_rule,
                 # 用 F1 score 的思想，结合高概率与覆盖率作为一个综合评分
-                'score': (2 * buy_prob * (samples/len(X))) / (buy_prob + (samples/len(X)))
+                'score': (2 * buy_prob_raw * (samples/len(X))) / (buy_prob_raw + (samples/len(X))) if buy_prob_raw > 0 else 0.0
             })
 
             print(f"⭐ 发现高潜选股节点 (节点ID: {leaf_id}):")
             print(f"   - 覆盖样本数: {samples} (占总样本 {samples / len(X) * 100:.1f}%)")
             print(f"   - 预测买入胜率 (加权): {buy_prob * 100:.1f}%")
-            print(f"   - 实际命中正样本数: {int(value[1])}")
+            print(f"   - 实际命中正样本数: {pos_count}")
             print(f"   - 【回测提取代码】:\n     selected_stocks = df[{pandas_rule}]\n")
 
     # 如果有规则，挑选最优的一条（综合评分最高）

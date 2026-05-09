@@ -197,11 +197,44 @@ def parse_args():
     parser.add_argument('--project_root', type=str, default='/home/quant/zc/backtrader/QuantBacktester_57',
                         help='QuantBacktester项目的根目录路径')
     parser.add_argument('--skip_backtest', action='store_true', default=False, help='仅生成调仓表，不执行回测')
+    parser.add_argument('--no_llm', action='store_true', default=False, help='禁用LLM链路，直接复用策略配置文件与字段映射文件')
+    parser.add_argument('--strategy_config', type=str, default='', help='策略配置文件路径(例如 variants/rb20_top10/strategy_config.json)')
+    parser.add_argument('--mapping_file', type=str, default='', help='字段映射文件路径(例如 base_cache/mapping_result.json)')
     return parser.parse_args()
 
 
 def main(args):
     print("\n===== 使用 Qlib 数据源的优质价值策略 =====")
+
+    if getattr(args, "no_llm", False):
+        if not getattr(args, "strategy_config", "") or not getattr(args, "mapping_file", ""):
+            print("已设置 no_llm，但未提供 strategy_config 或 mapping_file，无法继续。")
+            return
+        docs_dir = "documents"
+        stock_pool_file = "/home/quant/zc/finance_deal/qlib_data/price_data0821/instruments/stock_code.txt"
+        macro_file = os.path.join(docs_dir, "macro_data.csv")
+        config_path = os.path.abspath(args.strategy_config)
+        mapping_file = os.path.abspath(args.mapping_file)
+        strategy = QlibPremiumValueStrategy(
+            mapping_file=mapping_file,
+            stock_pool_file=stock_pool_file,
+            macro_file=macro_file,
+            use_config=True,
+            config_filename=os.path.basename(config_path),
+            config_dir=os.path.dirname(config_path),
+        )
+        rebalance_result = strategy.run()
+        strategy.save_results(rebalance_result, args.trade_file)
+        print(f"调仓表已保存至: {args.trade_file}")
+        print("\n===== 开始调用回测框架 =====")
+        if getattr(args, "skip_backtest", False):
+            print("已设置 skip_backtest，仅生成调仓表，跳过回测。")
+            return
+        cmd = build_run_llm_command(args)
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            raise RuntimeError(f"回测脚本执行失败，退出码: {result.returncode}")
+        return
 
     prompt, fund_start_date, fund_end_date = get_fund_prompt_and_dates(args, extract_rules_func=extract_rules_from_top_features)
 
